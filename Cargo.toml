@@ -1,0 +1,35 @@
+[package]
+name = "boinc-quota-rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "boinc_quota_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gui"
+path = "src/bin/gui.rs"
+
+[dependencies]
+sha2 = "0.10"
+eframe = "0.34"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio-util = { version = "0.7", features = ["codec"] }
+futures = "0.3"
+bollard = "0.21"
+base64 = "0.22"
+libc = "0.2"
+tempfile = "3"
+pyo3 = { version = "0.28.3", features = ["auto-initialize"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+hex = "0.4"
+dirs = "5"
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
