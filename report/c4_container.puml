@@ -1,0 +1,86 @@
+@startuml C4_Container_BOINC_Quota
+
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title C4 Container — boinc-quota-rs
+
+Person(user, "Пользователь", "Запускает узел как координатор или воркер через GUI")
+
+System_Boundary(node, "Узел boinc-quota-rs (один процесс Rust)") {
+
+    Container(gui, "GUI (Desktop App)", "Rust / eframe 0.34", "Отображает состояние сети, проекты, задачи, блокчейн.\nПринимает команды пользователя через интерактивные панели.")
+
+    Container(actor, "NetworkActor", "Rust / Tokio async", "Координирует всю сетевую логику.\nВ режиме координатора: принимает TCP-соединения, тикает часы сети.\nВ режиме воркера: подключается к координатору, управляет рабочим циклом.")
+
+    Container(network_engine, "Network Engine", "Rust (синхронный)", "Доменная модель: участники, проекты, задачи, аренда (lease), консенсус.\nРаспределяет награды, применяет штрафы, управляет очередью задач.")
+
+    Container(blockchain, "Blockchain", "Rust (in-process)", "Связанный список блоков с SHA-256.\nФиксирует mint / transfer / burn транзакции.\nПроверяет целостность цепочки.")
+
+    Container(executor, "Executor", "Rust", "Берёт задачи из очереди и выполняет их.\nОпределяет payload-тип: Python / inference / детерминированный.\nВозвращает digest и stdout для консенсуса.")
+
+    Container(estimator, "Estimator", "Rust + subprocess Python", "Оценивает ресурсы для Python-кода.\nЗапускает Python-subprocess для реального выполнения.\nВычисляет actual_cost по истекшему времени.")
+
+    Container(compute_module, "Compute Module", "Rust / Docker API", "Запускает Python в изолированном Docker-контейнере (CPU или GPU).\nОграничивает память и время выполнения.")
+
+    Container(sandbox, "Python Sandbox", "Rust / subprocess", "Fallback-исполнение Python без Docker.\nИспользуется когда Docker недоступен.")
+
+    Container(identity, "Identity", "Rust / Ed25519 + X25519", "Генерирует или загружает ключевую пару.\nПодписывает nonce при handshake.\nШифрует stdout-результаты для владельца проекта.")
+
+    ContainerDb(identity_file, "Ключевая пара", "Файл (~/.local/share/boinc-quota/identity.json)", "Персистентный Ed25519 + X25519 keypair узла.")
+
+    ContainerDb(coord_state, "Состояние координатора", "Файл (~/.local/share/boinc-quota/coordinator-state.json)", "Сериализованное состояние Network (JSON).\nВосстанавливается при перезапуске.")
+}
+
+System_Ext(docker_daemon, "Docker Daemon", "Запускает Python-контейнеры (CPU / GPU)")
+System_Ext(remote_node, "Удалённый узел\n(Координатор или Воркер)", "Другой экземпляр boinc-quota-rs")
+
+' User → GUI
+Rel(user, gui, "Управляет", "клики / ввод")
+
+' GUI ↔ NetworkActor
+Rel(gui, actor, "AppCommand", "mpsc channel")
+Rel(actor, gui, "AppEvent / StateUpdate", "mpsc channel")
+
+' NetworkActor → Network Engine
+Rel(actor, network_engine, "register / create / submit / tick / consensus", "вызов методов")
+
+' Network Engine → Blockchain
+Rel(network_engine, blockchain, "commit_block (mint / transfer / burn)", "вызов методов")
+
+' NetworkActor → Executor
+Rel(actor, executor, "process_next_task", "spawn_blocking / tokio::spawn")
+
+' Executor → Network Engine
+Rel(executor, network_engine, "request_task / heartbeat / submit_result", "вызов методов")
+
+' Executor → Estimator
+Rel(executor, estimator, "estimate / run_and_measure", "вызов методов")
+
+' Executor → Compute Module
+Rel(executor, compute_module, "execute_python / execute_python_gpu", "вызов методов")
+
+' Executor → Sandbox
+Rel(executor, sandbox, "run_python_sandboxed (fallback)", "вызов методов")
+
+' Executor → Identity (шифрование результата)
+Rel(executor, identity, "encrypt_for (pubkey)", "вызов методов")
+
+' Identity → файл
+Rel(identity, identity_file, "load / save", "fs I/O")
+
+' NetworkActor → Identity (handshake)
+Rel(actor, identity, "load_or_generate / sign_nonce", "вызов методов")
+
+' NetworkActor → coord_state (персистентность)
+Rel(actor, coord_state, "persist / load", "serde_json + fs I/O")
+
+' Compute Module → Docker
+Rel(compute_module, docker_daemon, "HTTP API (bollard)", "Unix socket / TCP")
+
+' NetworkActor ↔ Remote node
+Rel(actor, remote_node, "PeerRequest (JSON lines)", "TCP outbound (Worker→Coordinator)")
+Rel(remote_node, actor, "PeerResponse / StateUpdate (JSON lines)", "TCP inbound")
+
+@enduml

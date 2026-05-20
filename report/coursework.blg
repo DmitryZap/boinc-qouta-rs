@@ -1,0 +1,15 @@
+[0] Config.pm:328> INFO - This is Biber 2.21
+[0] Config.pm:331> INFO - Logfile is 'coursework.blg'
+[68] biber-darwin:342> INFO - === Tue May 19, 2026, 19:24:54
+[99] Biber.pm:421> INFO - Reading 'coursework.bcf'
+[151] Biber.pm:1002> INFO - Found 20 citekeys in bib section 0
+[156] Biber.pm:4487> INFO - Processing section 0
+[160] Biber.pm:4678> INFO - Looking for bibtex file 'refs.bib' for section 0
+[161] bibtex.pm:1713> INFO - LaTeX decoding ...
+[165] bibtex.pm:1519> INFO - Found BibTeX data source 'refs.bib'
+[205] UCollate.pm:68> INFO - Overriding locale 'ru-RU' defaults 'variable = shifted' with 'variable = non-ignorable'
+[205] UCollate.pm:68> INFO - Overriding locale 'ru-RU' defaults 'normalization = NFD' with 'normalization = prenormalized'
+[205] Biber.pm:4307> INFO - Sorting list 'nty/global//global/global/global' of type 'entry' with template 'nty' and locale 'ru-RU'
+[205] Biber.pm:4313> INFO - No sort tailoring available for locale 'ru-RU'
+[213] bbl.pm:676> INFO - Writing 'coursework.bbl' with encoding 'UTF-8'
+[215] bbl.pm:779> INFO - Output to coursework.bbl

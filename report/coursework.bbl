@@ -1,0 +1,668 @@
+% $ biblatex auxiliary file $
+% $ biblatex bbl format version 3.3 $
+% Do not modify the above lines!
+%
+% This is an auxiliary file used by the 'biblatex' package.
+% This file may safely be deleted. It will be recreated by
+% biber as required.
+%
+\begingroup
+\makeatletter
+\@ifundefined{ver@biblatex.sty}
+  {\@latex@error
+     {Missing 'biblatex' package}
+     {The bibliography requires the 'biblatex' package.}
+      \aftergroup\endinput}
+  {}
+\endgroup
+
+
+\refsection{0}
+  \datalist[entry]{nty/global//global/global/global}
+    \entry{anderson_boinc}{inproceedings}{}{}
+      \name{author}{1}{}{%
+        {{hash=81aeb47b3ff388d08b633fe3e3bc506a}{%
+           family={Anderson},
+           familyi={A\bibinitperiod},
+           given={D.\bibnamedelimi P.},
+           giveni={D\bibinitperiod\bibinitdelim P\bibinitperiod}}}%
+      }
+      \list{location}{1}{%
+        {Pittsburgh, PA, USA}%
+      }
+      \strng{namehash}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \strng{fullhash}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \strng{fullhashraw}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \strng{bibnamehash}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \strng{authorbibnamehash}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \strng{authornamehash}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \strng{authorfullhash}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \strng{authorfullhashraw}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \field{extraname}{1}
+      \field{sortinit}{A}
+      \field{sortinithash}{2f401846e2029bad6b3ecc16d50031e2}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Proceedings of the 5th IEEE/ACM International Workshop on Grid Computing}
+      \field{title}{BOINC: A System for Public-Resource Computing and Storage}
+      \field{year}{2004}
+      \field{pages}{4\bibrangedash 10}
+      \range{pages}{7}
+    \endentry
+    \entry{boinc_article}{article}{}{}
+      \name{author}{1}{}{%
+        {{hash=81aeb47b3ff388d08b633fe3e3bc506a}{%
+           family={Anderson},
+           familyi={A\bibinitperiod},
+           given={D.\bibnamedelimi P.},
+           giveni={D\bibinitperiod\bibinitdelim P\bibinitperiod}}}%
+      }
+      \strng{namehash}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \strng{fullhash}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \strng{fullhashraw}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \strng{bibnamehash}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \strng{authorbibnamehash}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \strng{authornamehash}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \strng{authorfullhash}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \strng{authorfullhashraw}{81aeb47b3ff388d08b633fe3e3bc506a}
+      \field{extraname}{2}
+      \field{sortinit}{A}
+      \field{sortinithash}{2f401846e2029bad6b3ecc16d50031e2}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Future Internet}
+      \field{number}{9}
+      \field{title}{Globally Scheduling Volunteer Computing}
+      \field{volume}{13}
+      \field{year}{2021}
+      \field{pages}{229}
+      \range{pages}{1}
+    \endentry
+    \entry{pbft}{inproceedings}{}{}
+      \name{author}{2}{}{%
+        {{hash=dbb70f8d2e7e56ff83c6ba7f8220e57f}{%
+           family={Castro},
+           familyi={C\bibinitperiod},
+           given={M.},
+           giveni={M\bibinitperiod}}}%
+        {{hash=a518179689ec6ebd262f93b97ebf03ae}{%
+           family={Liskov},
+           familyi={L\bibinitperiod},
+           given={B.},
+           giveni={B\bibinitperiod}}}%
+      }
+      \list{location}{1}{%
+        {New Orleans, USA}%
+      }
+      \strng{namehash}{58895805a64e5c71d282b931fccec3dc}
+      \strng{fullhash}{58895805a64e5c71d282b931fccec3dc}
+      \strng{fullhashraw}{58895805a64e5c71d282b931fccec3dc}
+      \strng{bibnamehash}{58895805a64e5c71d282b931fccec3dc}
+      \strng{authorbibnamehash}{58895805a64e5c71d282b931fccec3dc}
+      \strng{authornamehash}{58895805a64e5c71d282b931fccec3dc}
+      \strng{authorfullhash}{58895805a64e5c71d282b931fccec3dc}
+      \strng{authorfullhashraw}{58895805a64e5c71d282b931fccec3dc}
+      \field{sortinit}{C}
+      \field{sortinithash}{4d103a86280481745c9c897c925753c0}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Proceedings of the Third Symposium on Operating Systems Design and Implementation (OSDI)}
+      \field{title}{Practical Byzantine Fault Tolerance}
+      \field{year}{1999}
+      \field{pages}{173\bibrangedash 186}
+      \range{pages}{14}
+    \endentry
+    \entry{docker_docs}{online}{}{}
+      \name{author}{1}{}{%
+        {{hash=e6f3d214228cc5933c1a82019f7dc0e0}{%
+           family={{Docker, Inc.}},
+           familyi={D\bibinitperiod}}}%
+      }
+      \strng{namehash}{e6f3d214228cc5933c1a82019f7dc0e0}
+      \strng{fullhash}{e6f3d214228cc5933c1a82019f7dc0e0}
+      \strng{fullhashraw}{e6f3d214228cc5933c1a82019f7dc0e0}
+      \strng{bibnamehash}{e6f3d214228cc5933c1a82019f7dc0e0}
+      \strng{authorbibnamehash}{e6f3d214228cc5933c1a82019f7dc0e0}
+      \strng{authornamehash}{e6f3d214228cc5933c1a82019f7dc0e0}
+      \strng{authorfullhash}{e6f3d214228cc5933c1a82019f7dc0e0}
+      \strng{authorfullhashraw}{e6f3d214228cc5933c1a82019f7dc0e0}
+      \field{sortinit}{D}
+      \field{sortinithash}{6f385f66841fb5e82009dc833c761848}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{title}{Docker security documentation}
+      \field{urlday}{20}
+      \field{urlmonth}{4}
+      \field{urlyear}{2025}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://docs.docker.com/engine/security/
+      \endverb
+      \verb{url}
+      \verb https://docs.docker.com/engine/security/
+      \endverb
+    \endentry
+    \entry{egui_crate}{online}{}{}
+      \name{author}{1}{}{%
+        {{hash=aabc5ef35d6529376fb312b34d33ee74}{%
+           family={Ernerfeldt},
+           familyi={E\bibinitperiod},
+           given={E.},
+           giveni={E\bibinitperiod}}}%
+      }
+      \strng{namehash}{aabc5ef35d6529376fb312b34d33ee74}
+      \strng{fullhash}{aabc5ef35d6529376fb312b34d33ee74}
+      \strng{fullhashraw}{aabc5ef35d6529376fb312b34d33ee74}
+      \strng{bibnamehash}{aabc5ef35d6529376fb312b34d33ee74}
+      \strng{authorbibnamehash}{aabc5ef35d6529376fb312b34d33ee74}
+      \strng{authornamehash}{aabc5ef35d6529376fb312b34d33ee74}
+      \strng{authorfullhash}{aabc5ef35d6529376fb312b34d33ee74}
+      \strng{authorfullhashraw}{aabc5ef35d6529376fb312b34d33ee74}
+      \field{sortinit}{E}
+      \field{sortinithash}{8da8a182d344d5b9047633dfc0cc9131}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{title}{egui: an easy-to-use immediate-mode GUI in pure Rust}
+      \field{urlday}{20}
+      \field{urlmonth}{4}
+      \field{urlyear}{2025}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://github.com/emilk/egui
+      \endverb
+      \verb{url}
+      \verb https://github.com/emilk/egui
+      \endverb
+    \endentry
+    \entry{foldinghome}{online}{}{}
+      \name{author}{1}{}{%
+        {{hash=5a9b21c898940c2108f3d5408211de07}{%
+           family={{Folding@home Consortium}},
+           familyi={F\bibinitperiod}}}%
+      }
+      \strng{namehash}{5a9b21c898940c2108f3d5408211de07}
+      \strng{fullhash}{5a9b21c898940c2108f3d5408211de07}
+      \strng{fullhashraw}{5a9b21c898940c2108f3d5408211de07}
+      \strng{bibnamehash}{5a9b21c898940c2108f3d5408211de07}
+      \strng{authorbibnamehash}{5a9b21c898940c2108f3d5408211de07}
+      \strng{authornamehash}{5a9b21c898940c2108f3d5408211de07}
+      \strng{authorfullhash}{5a9b21c898940c2108f3d5408211de07}
+      \strng{authorfullhashraw}{5a9b21c898940c2108f3d5408211de07}
+      \field{sortinit}{F}
+      \field{sortinithash}{2638baaa20439f1b5a8f80c6c08a13b4}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{title}{Folding@home: fighting disease with a world wide distributed super computer}
+      \field{urlday}{20}
+      \field{urlmonth}{4}
+      \field{urlyear}{2025}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://foldingathome.org/
+      \endverb
+      \verb{url}
+      \verb https://foldingathome.org/
+      \endverb
+    \endentry
+    \entry{gridcoin}{online}{}{}
+      \name{author}{1}{}{%
+        {{hash=41f5a89117bf459351bd0fabcf385b84}{%
+           family={{Gridcoin Community}},
+           familyi={G\bibinitperiod}}}%
+      }
+      \strng{namehash}{41f5a89117bf459351bd0fabcf385b84}
+      \strng{fullhash}{41f5a89117bf459351bd0fabcf385b84}
+      \strng{fullhashraw}{41f5a89117bf459351bd0fabcf385b84}
+      \strng{bibnamehash}{41f5a89117bf459351bd0fabcf385b84}
+      \strng{authorbibnamehash}{41f5a89117bf459351bd0fabcf385b84}
+      \strng{authornamehash}{41f5a89117bf459351bd0fabcf385b84}
+      \strng{authorfullhash}{41f5a89117bf459351bd0fabcf385b84}
+      \strng{authorfullhashraw}{41f5a89117bf459351bd0fabcf385b84}
+      \field{sortinit}{G}
+      \field{sortinithash}{32d67eca0634bf53703493fb1090a2e8}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{title}{Gridcoin: rewarding BOINC distributed computation}
+      \field{urlday}{20}
+      \field{urlmonth}{4}
+      \field{urlyear}{2025}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://gridcoin.us/
+      \endverb
+      \verb{url}
+      \verb https://gridcoin.us/
+      \endverb
+    \endentry
+    \entry{eigentrust}{inproceedings}{}{}
+      \name{author}{3}{}{%
+        {{hash=568b0ba93cc7a753c39c65d70e5a8a91}{%
+           family={Kamvar},
+           familyi={K\bibinitperiod},
+           given={S.\bibnamedelimi D.},
+           giveni={S\bibinitperiod\bibinitdelim D\bibinitperiod}}}%
+        {{hash=3076b32f8a5b44f59977b6eb57d00701}{%
+           family={Schlosser},
+           familyi={S\bibinitperiod},
+           given={M.\bibnamedelimi T.},
+           giveni={M\bibinitperiod\bibinitdelim T\bibinitperiod}}}%
+        {{hash=44a2bb2cd3aa4f3b7015bd926df5c5ff}{%
+           family={Garcia-Molina},
+           familyi={G\bibinithyphendelim M\bibinitperiod},
+           given={H.},
+           giveni={H\bibinitperiod}}}%
+      }
+      \list{location}{1}{%
+        {Budapest, Hungary}%
+      }
+      \strng{namehash}{e66cb4613078feb062920e1578c53d6e}
+      \strng{fullhash}{e66cb4613078feb062920e1578c53d6e}
+      \strng{fullhashraw}{e66cb4613078feb062920e1578c53d6e}
+      \strng{bibnamehash}{e66cb4613078feb062920e1578c53d6e}
+      \strng{authorbibnamehash}{e66cb4613078feb062920e1578c53d6e}
+      \strng{authornamehash}{e66cb4613078feb062920e1578c53d6e}
+      \strng{authorfullhash}{e66cb4613078feb062920e1578c53d6e}
+      \strng{authorfullhashraw}{e66cb4613078feb062920e1578c53d6e}
+      \field{sortinit}{K}
+      \field{sortinithash}{c02bf6bff1c488450c352b40f5d853ab}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Proceedings of the 12th International World Wide Web Conference}
+      \field{title}{The EigenTrust Algorithm for Reputation Management in P2P Networks}
+      \field{year}{2003}
+      \field{pages}{640\bibrangedash 651}
+      \range{pages}{12}
+    \endentry
+    \entry{rust_book}{book}{}{}
+      \name{author}{2}{}{%
+        {{hash=a551ddf082bcc51604180ca699b6c4f9}{%
+           family={Klabnik},
+           familyi={K\bibinitperiod},
+           given={S.},
+           giveni={S\bibinitperiod}}}%
+        {{hash=b2c338ab70dd3556883e7e3123a06bfb}{%
+           family={Nichols},
+           familyi={N\bibinitperiod},
+           given={C.},
+           giveni={C\bibinitperiod}}}%
+      }
+      \list{location}{1}{%
+        {San Francisco}%
+      }
+      \list{publisher}{1}{%
+        {No Starch Press}%
+      }
+      \strng{namehash}{2699766b0f15ae0e1a2ba53c56c4d768}
+      \strng{fullhash}{2699766b0f15ae0e1a2ba53c56c4d768}
+      \strng{fullhashraw}{2699766b0f15ae0e1a2ba53c56c4d768}
+      \strng{bibnamehash}{2699766b0f15ae0e1a2ba53c56c4d768}
+      \strng{authorbibnamehash}{2699766b0f15ae0e1a2ba53c56c4d768}
+      \strng{authornamehash}{2699766b0f15ae0e1a2ba53c56c4d768}
+      \strng{authorfullhash}{2699766b0f15ae0e1a2ba53c56c4d768}
+      \strng{authorfullhashraw}{2699766b0f15ae0e1a2ba53c56c4d768}
+      \field{sortinit}{K}
+      \field{sortinithash}{c02bf6bff1c488450c352b40f5d853ab}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{edition}{2}
+      \field{title}{The Rust Programming Language}
+      \field{year}{2023}
+      \field{pages}{560}
+      \range{pages}{1}
+    \endentry
+    \entry{byzantine_generals}{article}{}{}
+      \name{author}{3}{}{%
+        {{hash=ef82223e035dbb62f84cb1c0782df38c}{%
+           family={Lamport},
+           familyi={L\bibinitperiod},
+           given={L.},
+           giveni={L\bibinitperiod}}}%
+        {{hash=0c0767bf26ca3cccc29de2cecc3091d3}{%
+           family={Shostak},
+           familyi={S\bibinitperiod},
+           given={R.},
+           giveni={R\bibinitperiod}}}%
+        {{hash=c539fa11a0e929896003ed8e46280a83}{%
+           family={Pease},
+           familyi={P\bibinitperiod},
+           given={M.},
+           giveni={M\bibinitperiod}}}%
+      }
+      \strng{namehash}{a60e475fc37499d0397c9e364d25f39e}
+      \strng{fullhash}{a60e475fc37499d0397c9e364d25f39e}
+      \strng{fullhashraw}{a60e475fc37499d0397c9e364d25f39e}
+      \strng{bibnamehash}{a60e475fc37499d0397c9e364d25f39e}
+      \strng{authorbibnamehash}{a60e475fc37499d0397c9e364d25f39e}
+      \strng{authornamehash}{a60e475fc37499d0397c9e364d25f39e}
+      \strng{authorfullhash}{a60e475fc37499d0397c9e364d25f39e}
+      \strng{authorfullhashraw}{a60e475fc37499d0397c9e364d25f39e}
+      \field{sortinit}{L}
+      \field{sortinithash}{7c47d417cecb1f4bd38d1825c427a61a}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{ACM Transactions on Programming Languages and Systems}
+      \field{number}{3}
+      \field{title}{The Byzantine Generals Problem}
+      \field{volume}{4}
+      \field{year}{1982}
+      \field{pages}{382\bibrangedash 401}
+      \range{pages}{20}
+    \endentry
+    \entry{merkel_docker}{article}{}{}
+      \name{author}{1}{}{%
+        {{hash=90eade11523d9865cc41c8ff27c760f9}{%
+           family={Merkel},
+           familyi={M\bibinitperiod},
+           given={D.},
+           giveni={D\bibinitperiod}}}%
+      }
+      \strng{namehash}{90eade11523d9865cc41c8ff27c760f9}
+      \strng{fullhash}{90eade11523d9865cc41c8ff27c760f9}
+      \strng{fullhashraw}{90eade11523d9865cc41c8ff27c760f9}
+      \strng{bibnamehash}{90eade11523d9865cc41c8ff27c760f9}
+      \strng{authorbibnamehash}{90eade11523d9865cc41c8ff27c760f9}
+      \strng{authornamehash}{90eade11523d9865cc41c8ff27c760f9}
+      \strng{authorfullhash}{90eade11523d9865cc41c8ff27c760f9}
+      \strng{authorfullhashraw}{90eade11523d9865cc41c8ff27c760f9}
+      \field{sortinit}{M}
+      \field{sortinithash}{4625c616857f13d17ce56f7d4f97d451}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Linux Journal}
+      \field{number}{239}
+      \field{title}{Docker: lightweight Linux containers for consistent development and deployment}
+      \field{volume}{2014}
+      \field{year}{2014}
+    \endentry
+    \entry{merkle_1979}{article}{}{}
+      \name{author}{1}{}{%
+        {{hash=78722ec3ebe99459c74ed04f4912d98e}{%
+           family={Merkle},
+           familyi={M\bibinitperiod},
+           given={R.\bibnamedelimi C.},
+           giveni={R\bibinitperiod\bibinitdelim C\bibinitperiod}}}%
+      }
+      \strng{namehash}{78722ec3ebe99459c74ed04f4912d98e}
+      \strng{fullhash}{78722ec3ebe99459c74ed04f4912d98e}
+      \strng{fullhashraw}{78722ec3ebe99459c74ed04f4912d98e}
+      \strng{bibnamehash}{78722ec3ebe99459c74ed04f4912d98e}
+      \strng{authorbibnamehash}{78722ec3ebe99459c74ed04f4912d98e}
+      \strng{authornamehash}{78722ec3ebe99459c74ed04f4912d98e}
+      \strng{authorfullhash}{78722ec3ebe99459c74ed04f4912d98e}
+      \strng{authorfullhashraw}{78722ec3ebe99459c74ed04f4912d98e}
+      \field{sortinit}{M}
+      \field{sortinithash}{4625c616857f13d17ce56f7d4f97d451}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Stanford University Ph.D. Dissertation}
+      \field{title}{Secrecy, Authentication, and Public Key Systems}
+      \field{year}{1979}
+    \endentry
+    \entry{nakamoto_bitcoin}{misc}{}{}
+      \name{author}{1}{}{%
+        {{hash=5f6f52cf6648e8089d86dc975e451ab1}{%
+           family={Nakamoto},
+           familyi={N\bibinitperiod},
+           given={S.},
+           giveni={S\bibinitperiod}}}%
+      }
+      \strng{namehash}{5f6f52cf6648e8089d86dc975e451ab1}
+      \strng{fullhash}{5f6f52cf6648e8089d86dc975e451ab1}
+      \strng{fullhashraw}{5f6f52cf6648e8089d86dc975e451ab1}
+      \strng{bibnamehash}{5f6f52cf6648e8089d86dc975e451ab1}
+      \strng{authorbibnamehash}{5f6f52cf6648e8089d86dc975e451ab1}
+      \strng{authornamehash}{5f6f52cf6648e8089d86dc975e451ab1}
+      \strng{authorfullhash}{5f6f52cf6648e8089d86dc975e451ab1}
+      \strng{authorfullhashraw}{5f6f52cf6648e8089d86dc975e451ab1}
+      \field{sortinit}{N}
+      \field{sortinithash}{22369a73d5f88983a108b63f07f37084}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{title}{Bitcoin: A Peer-to-Peer Electronic Cash System}
+      \field{urlday}{20}
+      \field{urlmonth}{4}
+      \field{urlyear}{2025}
+      \field{year}{2008}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://bitcoin.org/bitcoin.pdf
+      \endverb
+      \verb{url}
+      \verb https://bitcoin.org/bitcoin.pdf
+      \endverb
+    \endentry
+    \entry{fips_180_4}{report}{}{}
+      \name{author}{1}{}{%
+        {{hash=ef9cb61878e61d434507444346b29d1a}{%
+           family={{National Institute of Standards and Technology}},
+           familyi={N\bibinitperiod}}}%
+      }
+      \list{institution}{1}{%
+        {U. S. Department of Commerce}%
+      }
+      \list{location}{1}{%
+        {Gaithersburg, MD}%
+      }
+      \strng{namehash}{ef9cb61878e61d434507444346b29d1a}
+      \strng{fullhash}{ef9cb61878e61d434507444346b29d1a}
+      \strng{fullhashraw}{ef9cb61878e61d434507444346b29d1a}
+      \strng{bibnamehash}{ef9cb61878e61d434507444346b29d1a}
+      \strng{authorbibnamehash}{ef9cb61878e61d434507444346b29d1a}
+      \strng{authornamehash}{ef9cb61878e61d434507444346b29d1a}
+      \strng{authorfullhash}{ef9cb61878e61d434507444346b29d1a}
+      \strng{authorfullhashraw}{ef9cb61878e61d434507444346b29d1a}
+      \field{sortinit}{N}
+      \field{sortinithash}{22369a73d5f88983a108b63f07f37084}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{number}{FIPS PUB 180-4}
+      \field{title}{Secure Hash Standard (SHS)}
+      \field{type}{techreport}
+      \field{year}{2015}
+    \endentry
+    \entry{The_Condor_Experience}{article}{}{}
+      \name{author}{3}{}{%
+        {{hash=35631e8816c46670bdd5f36f84bd54dc}{%
+           family={Thain},
+           familyi={T\bibinitperiod},
+           given={D.},
+           giveni={D\bibinitperiod}}}%
+        {{hash=32638244b2578fd5b2293228330dc45d}{%
+           family={Tannenbaum},
+           familyi={T\bibinitperiod},
+           given={T.},
+           giveni={T\bibinitperiod}}}%
+        {{hash=b32c4d6332b2aafd05d0adb6010d97ad}{%
+           family={Livny},
+           familyi={L\bibinitperiod},
+           given={M.},
+           giveni={M\bibinitperiod}}}%
+      }
+      \strng{namehash}{a0fa642e6d49eff4452e9162ac1b3a3a}
+      \strng{fullhash}{a0fa642e6d49eff4452e9162ac1b3a3a}
+      \strng{fullhashraw}{a0fa642e6d49eff4452e9162ac1b3a3a}
+      \strng{bibnamehash}{a0fa642e6d49eff4452e9162ac1b3a3a}
+      \strng{authorbibnamehash}{a0fa642e6d49eff4452e9162ac1b3a3a}
+      \strng{authornamehash}{a0fa642e6d49eff4452e9162ac1b3a3a}
+      \strng{authorfullhash}{a0fa642e6d49eff4452e9162ac1b3a3a}
+      \strng{authorfullhashraw}{a0fa642e6d49eff4452e9162ac1b3a3a}
+      \field{sortinit}{T}
+      \field{sortinithash}{9af77f0292593c26bde9a56e688eaee9}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Concurrency and Computation: Practice and Experience}
+      \field{number}{2--4}
+      \field{title}{Distributed Computing in Practice: the Condor Experience}
+      \field{volume}{17}
+      \field{year}{2005}
+      \field{pages}{323\bibrangedash 356}
+      \range{pages}{34}
+    \endentry
+    \entry{tokio_rs}{online}{}{}
+      \name{author}{1}{}{%
+        {{hash=f386182c95bd1f3c679a3493d7e45617}{%
+           family={{Tokio Contributors}},
+           familyi={T\bibinitperiod}}}%
+      }
+      \strng{namehash}{f386182c95bd1f3c679a3493d7e45617}
+      \strng{fullhash}{f386182c95bd1f3c679a3493d7e45617}
+      \strng{fullhashraw}{f386182c95bd1f3c679a3493d7e45617}
+      \strng{bibnamehash}{f386182c95bd1f3c679a3493d7e45617}
+      \strng{authorbibnamehash}{f386182c95bd1f3c679a3493d7e45617}
+      \strng{authornamehash}{f386182c95bd1f3c679a3493d7e45617}
+      \strng{authorfullhash}{f386182c95bd1f3c679a3493d7e45617}
+      \strng{authorfullhashraw}{f386182c95bd1f3c679a3493d7e45617}
+      \field{sortinit}{T}
+      \field{sortinithash}{9af77f0292593c26bde9a56e688eaee9}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{title}{Tokio: an asynchronous runtime for the Rust programming language}
+      \field{urlday}{20}
+      \field{urlmonth}{4}
+      \field{urlyear}{2025}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://tokio.rs/
+      \endverb
+      \verb{url}
+      \verb https://tokio.rs/
+      \endverb
+    \endentry
+    \entry{boincwebsite}{online}{}{}
+      \name{author}{1}{}{%
+        {{hash=e27e79c8e4c937cdf27b6f80f7fd7ba2}{%
+           family={{University of California, Berkeley}},
+           familyi={U\bibinitperiod}}}%
+      }
+      \strng{namehash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \strng{fullhash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \strng{fullhashraw}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \strng{bibnamehash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \strng{authorbibnamehash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \strng{authornamehash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \strng{authorfullhash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \strng{authorfullhashraw}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \field{extraname}{1}
+      \field{sortinit}{U}
+      \field{sortinithash}{6901a00e45705986ee5e7ca9fd39adca}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{title}{BOINC: open-source software for volunteer computing}
+      \field{urlday}{20}
+      \field{urlmonth}{4}
+      \field{urlyear}{2025}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://boinc.berkeley.edu/
+      \endverb
+      \verb{url}
+      \verb https://boinc.berkeley.edu/
+      \endverb
+    \endentry
+    \entry{boincwebsite_arcitecture}{online}{}{}
+      \name{author}{1}{}{%
+        {{hash=e27e79c8e4c937cdf27b6f80f7fd7ba2}{%
+           family={{University of California, Berkeley}},
+           familyi={U\bibinitperiod}}}%
+      }
+      \strng{namehash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \strng{fullhash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \strng{fullhashraw}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \strng{bibnamehash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \strng{authorbibnamehash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \strng{authornamehash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \strng{authorfullhash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \strng{authorfullhashraw}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
+      \field{extraname}{2}
+      \field{sortinit}{U}
+      \field{sortinithash}{6901a00e45705986ee5e7ca9fd39adca}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{title}{How BOINC works}
+      \field{urlday}{20}
+      \field{urlmonth}{4}
+      \field{urlyear}{2025}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://boinc.berkeley.edu/wiki/How_BOINC_works
+      \endverb
+      \verb{url}
+      \verb https://boinc.berkeley.edu/wiki/How_BOINC_works
+      \endverb
+    \endentry
+    \entry{golem_whitepaper}{report}{}{}
+      \true{moreauthor}
+      \true{morelabelname}
+      \name{author}{1}{}{%
+        {{hash=f7bde48ba15974cc9b284b06112df365}{%
+           family={Zamfir},
+           familyi={Z\bibinitperiod},
+           given={A.},
+           giveni={A\bibinitperiod}}}%
+      }
+      \list{institution}{1}{%
+        {Golem Factory GmbH}%
+      }
+      \strng{namehash}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
+      \strng{fullhash}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
+      \strng{fullhashraw}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
+      \strng{bibnamehash}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
+      \strng{authorbibnamehash}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
+      \strng{authornamehash}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
+      \strng{authorfullhash}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
+      \strng{authorfullhashraw}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
+      \field{sortinit}{Z}
+      \field{sortinithash}{96892c0b0a36bb8557c40c49813d48b3}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{title}{Golem: A Decentralized Supercomputer}
+      \field{type}{techreport}
+      \field{urlday}{20}
+      \field{urlmonth}{4}
+      \field{urlyear}{2025}
+      \field{year}{2016}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://golem.network/golem_whitepaper.pdf
+      \endverb
+      \verb{url}
+      \verb https://golem.network/golem_whitepaper.pdf
+      \endverb
+    \endentry
+    \entry{economic_model_article}{article}{}{}
+      \name{author}{2}{}{%
+        {{hash=6dcabedc22b30f2c341e55edfb977b13}{%
+           family={Топорков},
+           familyi={Т\bibinitperiod},
+           given={В.\bibnamedelimi В.},
+           giveni={В\bibinitperiod\bibinitdelim В\bibinitperiod}}}%
+        {{hash=56a99ca834e3c366fe39d5a916330e3a}{%
+           family={Емельянов},
+           familyi={Е\bibinitperiod},
+           given={Д.\bibnamedelimi М.},
+           giveni={Д\bibinitperiod\bibinitdelim М\bibinitperiod}}}%
+      }
+      \strng{namehash}{2f0891b33524959a0d86ffb4e337ef2a}
+      \strng{fullhash}{2f0891b33524959a0d86ffb4e337ef2a}
+      \strng{fullhashraw}{2f0891b33524959a0d86ffb4e337ef2a}
+      \strng{bibnamehash}{2f0891b33524959a0d86ffb4e337ef2a}
+      \strng{authorbibnamehash}{2f0891b33524959a0d86ffb4e337ef2a}
+      \strng{authornamehash}{2f0891b33524959a0d86ffb4e337ef2a}
+      \strng{authorfullhash}{2f0891b33524959a0d86ffb4e337ef2a}
+      \strng{authorfullhashraw}{2f0891b33524959a0d86ffb4e337ef2a}
+      \field{sortinit}{Т}
+      \field{sortinithash}{f2616f6a7966d80048da61c919aeb3ae}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Программирование}
+      \field{number}{1}
+      \field{title}{Экономическая модель планирования и справедливого разделения ресурсов в распределённых вычислениях}
+      \field{volume}{40}
+      \field{year}{2014}
+      \field{pages}{53\bibrangedash 62}
+      \range{pages}{10}
+    \endentry
+  \enddatalist
+\endrefsection
+\endinput
+
