@@ -29,7 +29,7 @@ use sha2::{Digest, Sha256};
 
 use crate::blockchain::{BlockVote, NodeKey};
 use crate::identity::Identity;
-use crate::network::Network;
+use crate::network::{Network, NetworkConfig};
 use crate::ops::LedgerOp;
 
 /// A consensus-log block: a batch of operations plus the BFT commit
@@ -159,7 +159,13 @@ impl ConsensusEngine {
         Self {
             identity,
             me,
-            state: Network::default(),
+            // Task-result quorum 1: a single worker's report finalizes a task.
+            // All replicas use the same config, so state stays deterministic.
+            // (This is the compute layer; block insertion still uses BFT quorum.)
+            state: Network::with_config(NetworkConfig {
+                consensus_quorum: 1,
+                ..NetworkConfig::default()
+            }),
             chain: vec![OpBlock::genesis()],
             mempool: Vec::new(),
             validators,
