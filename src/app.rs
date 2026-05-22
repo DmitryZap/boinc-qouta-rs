@@ -60,6 +60,12 @@ pub struct BoincApp {
     node_mode: NodeMode,
     listen_addr: String,
     coord_addr: String,
+    /// User-managed list of known coordinator addresses (Worker mode picks one).
+    coordinators: Vec<String>,
+    new_coordinator_input: String,
+    /// Other coordinators this coordinator peers with (consensus mesh).
+    peer_coordinators: Vec<String>,
+    new_peer_coordinator_input: String,
     my_name: String,
     my_balance_input: String,
 
@@ -133,6 +139,15 @@ impl BoincApp {
             node_mode: NodeMode::Coordinator,
             listen_addr: "0.0.0.0:7878".to_string(),
             coord_addr: "127.0.0.1:7878".to_string(),
+            coordinators: vec![
+                "127.0.0.1:7878".to_string(),
+                "127.0.0.1:7879".to_string(),
+                "127.0.0.1:7880".to_string(),
+                "192.168.1.10:7878".to_string(),
+            ],
+            new_coordinator_input: String::new(),
+            peer_coordinators: Vec::new(),
+            new_peer_coordinator_input: String::new(),
             my_name: "Alice".to_string(),
             my_balance_input: "100".to_string(),
             new_project_name: String::new(),
@@ -208,6 +223,15 @@ impl BoincApp {
                     self.my_id = Some(participant_id);
                     self.log
                         .push_back(format!("Registered as participant #{participant_id}"));
+                }
+                AppEvent::Identity {
+                    signing_short,
+                    encryption_short,
+                } => {
+                    // Reflect the identity the node actually runs under (derived
+                    // from the connection), not the on-disk default.
+                    self.my_public_key_short = signing_short;
+                    self.my_encryption_pubkey_short = encryption_short;
                 }
                 AppEvent::StateUpdate(snap) => {
                     self.snapshot = snap;
@@ -305,6 +329,78 @@ fn payload_preview(payload: &str, max_chars: usize) -> String {
     } else {
         preview
     }
+}
+
+/// Bordered, scrollable list box of addresses (like an HTML `<select>`). When
+/// `highlight` is set, the row equal to `selected` is highlighted and clicking a
+/// row writes it into `selected`.
+fn address_listbox(ui: &mut egui::Ui, list: &[String], selected: &mut String, highlight: bool) {
+    egui::Frame::new()
+        .fill(BG_APP)
+        .stroke(Stroke::new(1.0, BG_CARD))
+        .inner_margin(Margin::same(2i8))
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .max_height(110.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    if list.is_empty() {
+                        ui.add_space(6.0);
+                        ui.label(RichText::new("— none —").size(11.0).color(C_MUTED));
+                        ui.add_space(6.0);
+                    }
+                    for addr in list {
+                        let sel = highlight && selected == addr;
+                        if ui
+                            .add_sized(
+                                [ui.available_width(), 24.0],
+                                Button::selectable(
+                                    sel,
+                                    RichText::new(addr)
+                                        .monospace()
+                                        .color(if sel { ACCENT } else { TEXT_PRI }),
+                                ),
+                            )
+                            .clicked()
+                        {
+                            *selected = addr.clone();
+                        }
+                    }
+                });
+        });
+}
+
+/// Input + "Add" button that appends a trimmed, unique address to `list`. If
+/// `select_into` is given, the added address becomes the selection.
+fn add_address_row(
+    ui: &mut egui::Ui,
+    list: &mut Vec<String>,
+    input: &mut String,
+    select_into: Option<&mut String>,
+    hint: &str,
+) {
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [ui.available_width() - 60.0, 28.0],
+            egui::TextEdit::singleline(input).hint_text(hint),
+        );
+        if ui
+            .add_sized(
+                [56.0, 28.0],
+                Button::new(RichText::new("Add").color(BG_APP)).fill(ACCENT),
+            )
+            .clicked()
+        {
+            let a = input.trim().to_string();
+            if !a.is_empty() && !list.contains(&a) {
+                list.push(a.clone());
+                if let Some(s) = select_into {
+                    *s = a;
+                }
+                input.clear();
+            }
+        }
+    });
 }
 
 // ── eframe::App ───────────────────────────────────────────────────────────────
@@ -540,7 +636,12 @@ impl eframe::App for BoincApp {
                     .inner_margin(Margin::same(16i8)),
             )
             .show_inside(ui, |ui| match self.active_tab {
-                Tab::Connect => self.draw_connect_tab(ui),
+                Tab::Connect => {
+                    egui::ScrollArea::vertical()
+                        .id_salt("connect_scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| self.draw_connect_tab(ui));
+                }
                 Tab::Projects => self.draw_projects_tab(ui),
                 Tab::Tasks => self.draw_tasks_tab(ui),
                 Tab::Executor => self.draw_executor_tab(ui),
@@ -701,13 +802,16 @@ impl BoincApp {
                         NodeMode::Coordinator => {
                             ui.label(RichText::new("Listen address").size(11.0).color(TEXT_SEC));
                             ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut self.listen_addr));
-                            ui.add_space(4.0);
-                            ui.label(RichText::new("Peer coordinators (comma-separated, blank if first)").size(11.0).color(TEXT_SEC));
-                            ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut self.bootstrap_input));
+                            ui.add_space(6.0);
+                            ui.label(RichText::new("Peer coordinators").size(11.0).color(TEXT_SEC));
+                            ui.add_space(2.0);
+                            let mut scratch = String::new();
+                            address_listbox(ui, &self.peer_coordinators, &mut scratch, false);
                         }
                         NodeMode::Worker => {
-                            ui.label(RichText::new("Coordinator address").size(11.0).color(TEXT_SEC));
-                            ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut self.coord_addr));
+                            ui.label(RichText::new("Coordinators").size(11.0).color(TEXT_SEC));
+                            ui.add_space(2.0);
+                            address_listbox(ui, &self.coordinators, &mut self.coord_addr, true);
                         }
                         NodeMode::Peer => {
                             ui.label(RichText::new("Listen address").size(11.0).color(TEXT_SEC));
@@ -717,17 +821,35 @@ impl BoincApp {
                             ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut self.bootstrap_input));
                         }
                     }
-                    if matches!(self.node_mode, NodeMode::Coordinator) {
-                        ui.add_space(4.0);
-                        ui.label(RichText::new("Quorum (workers needed for consensus)").size(11.0).color(TEXT_SEC));
-                        ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut self.quorum_input));
-                    }
                     ui.add_space(4.0);
                     ui.label(RichText::new("Your name").size(11.0).color(TEXT_SEC));
                     ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut self.my_name));
                     ui.add_space(4.0);
                     ui.label(RichText::new("Initial balance").size(11.0).color(TEXT_SEC));
                     ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut self.my_balance_input));
+                    match self.node_mode {
+                        NodeMode::Worker => {
+                            ui.add_space(8.0);
+                            add_address_row(
+                                ui,
+                                &mut self.coordinators,
+                                &mut self.new_coordinator_input,
+                                Some(&mut self.coord_addr),
+                                "add coordinator host:port",
+                            );
+                        }
+                        NodeMode::Coordinator => {
+                            ui.add_space(8.0);
+                            add_address_row(
+                                ui,
+                                &mut self.peer_coordinators,
+                                &mut self.new_peer_coordinator_input,
+                                None,
+                                "add peer coordinator host:port",
+                            );
+                        }
+                        NodeMode::Peer => {}
+                    }
                     ui.add_space(10.0);
                     if ui.add_sized(
                         [ui.available_width(), 36.0],
@@ -739,11 +861,7 @@ impl BoincApp {
                             NodeMode::Coordinator => self.send(AppCommand::ConnectCoordinator {
                                 listen_addr: self.listen_addr.clone(),
                                 name: self.my_name.clone(), balance, quorum,
-                                peer_coordinators: self.bootstrap_input
-                                    .split(',')
-                                    .map(|s| s.trim().to_string())
-                                    .filter(|s| !s.is_empty())
-                                    .collect(),
+                                peer_coordinators: self.peer_coordinators.clone(),
                             }),
                             NodeMode::Worker => self.send(AppCommand::ConnectWorker {
                                 coord_addr: self.coord_addr.clone(),
