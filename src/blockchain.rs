@@ -3,6 +3,18 @@ use sha2::{Digest, Sha256};
 
 pub type Address = u64;
 
+/// Ed25519 public key identifying a consensus node (proposer / voter).
+pub type NodeKey = [u8; 32];
+
+/// A single validator's signed approval of a block. Signature is over the
+/// block's `hash` (which itself commits to index/tick/prev_hash/txs/proposer).
+/// Collected into `Block::votes` as the BFT commit certificate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockVote {
+    pub voter: NodeKey,
+    pub signature: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Transaction {
     Mint {
@@ -59,15 +71,27 @@ pub struct Block {
     pub tick: u64,
     pub prev_hash: [u8; 32],
     pub transactions: Vec<Transaction>,
+    /// Public key of the node that proposed this block. Zero for genesis and
+    /// for locally-committed (non-consensus) blocks.
+    #[serde(default)]
+    pub proposer: NodeKey,
     pub hash: [u8; 32],
+    /// BFT commit certificate: validator signatures over `hash`. Empty for
+    /// genesis and locally-committed blocks; populated when a block is sealed
+    /// through distributed consensus.
+    #[serde(default)]
+    pub votes: Vec<BlockVote>,
 }
 
 impl Block {
-    fn compute_hash(
+    /// Hash commits to everything that defines the block *except* the vote
+    /// certificate — votes are gathered after the hash is fixed, so they sign it.
+    pub fn compute_hash(
         index: u64,
         tick: u64,
         prev_hash: &[u8; 32],
         transactions: &[Transaction],
+        proposer: &NodeKey,
     ) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(index.to_le_bytes());
@@ -76,17 +100,33 @@ impl Block {
         for tx in transactions {
             hasher.update(tx.serialize());
         }
+        hasher.update(proposer);
         hasher.finalize().into()
     }
 
+    /// Build a block with a zero proposer and no votes (legacy local commit).
     fn new(index: u64, tick: u64, prev_hash: [u8; 32], transactions: Vec<Transaction>) -> Self {
-        let hash = Self::compute_hash(index, tick, &prev_hash, &transactions);
+        Self::proposed(index, tick, prev_hash, transactions, [0u8; 32])
+    }
+
+    /// Build an unsigned candidate block attributed to `proposer`. The commit
+    /// certificate (`votes`) is filled in later once a quorum signs `hash`.
+    pub fn proposed(
+        index: u64,
+        tick: u64,
+        prev_hash: [u8; 32],
+        transactions: Vec<Transaction>,
+        proposer: NodeKey,
+    ) -> Self {
+        let hash = Self::compute_hash(index, tick, &prev_hash, &transactions, &proposer);
         Self {
             index,
             tick,
             prev_hash,
             transactions,
+            proposer,
             hash,
+            votes: Vec::new(),
         }
     }
 }
@@ -116,6 +156,42 @@ impl Blockchain {
         let block = Block::new(index, tick, prev_hash, transactions);
         self.blocks.push(block);
         self.blocks.last().unwrap()
+    }
+
+    /// Hash of the current chain tip; what the next block must point back to.
+    pub fn head_hash(&self) -> [u8; 32] {
+        self.blocks.last().map(|b| b.hash).unwrap_or([0u8; 32])
+    }
+
+    /// Index the next appended block must carry.
+    pub fn next_index(&self) -> u64 {
+        self.blocks.len() as u64
+    }
+
+    /// Append a block that was sealed elsewhere (consensus / sync). Validates
+    /// the index, prev-hash linkage, and that the stored hash matches the
+    /// recomputed one. The vote certificate is NOT checked here — the caller
+    /// (consensus engine) verifies signatures against the validator set, since
+    /// the chain itself does not know who the validators are.
+    pub fn append_committed(&mut self, block: Block) -> std::result::Result<(), &'static str> {
+        if block.index != self.next_index() {
+            return Err("unexpected block index");
+        }
+        if block.prev_hash != self.head_hash() {
+            return Err("prev_hash does not match chain head");
+        }
+        let expected = Block::compute_hash(
+            block.index,
+            block.tick,
+            &block.prev_hash,
+            &block.transactions,
+            &block.proposer,
+        );
+        if block.hash != expected {
+            return Err("block hash mismatch");
+        }
+        self.blocks.push(block);
+        Ok(())
     }
 
     pub fn balance_of(&self, address: Address) -> u64 {
@@ -153,6 +229,7 @@ impl Blockchain {
                 block.tick,
                 &block.prev_hash,
                 &block.transactions,
+                &block.proposer,
             );
             if block.hash != expected_hash {
                 return false;

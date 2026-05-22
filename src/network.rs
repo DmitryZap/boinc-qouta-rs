@@ -1,12 +1,14 @@
 use std::collections::{HashMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::blockchain::{Address, Blockchain, Transaction};
 use crate::identity::EncryptedBlob;
 use crate::model::{
     Participant, ParticipantId, Project, ProjectId, Task, TaskId, TaskReport, TaskStatus,
 };
+use crate::ops::LedgerOp;
 
 pub const PROJECT_ID_OFFSET: u64 = 1_000_000_000;
 
@@ -149,6 +151,158 @@ impl Network {
         id
     }
 
+    /// Register a participant with an explicit, externally-chosen id (the
+    /// pubkey-derived account address). Idempotent — a repeated registration of
+    /// a known id is a no-op, so applying the same op on every replica (or
+    /// re-applying during sync) is safe. Mints `initial_balance` on first sight.
+    pub fn register_participant_with_id(
+        &mut self,
+        id: ParticipantId,
+        name: impl Into<String>,
+        initial_balance: u64,
+        public_key: Option<[u8; 32]>,
+    ) {
+        if self.participants.contains_key(&id) {
+            return;
+        }
+        let mut participant = Participant::new(id, name);
+        if let Some(pk) = public_key {
+            participant = participant.with_public_key(pk);
+        }
+        self.participants.insert(id, participant);
+        self.next_participant_id = self.next_participant_id.max(id + 1);
+        if initial_balance > 0 {
+            self.blockchain.commit_block(
+                self.current_tick,
+                vec![Transaction::Mint {
+                    to: id,
+                    amount: initial_balance,
+                }],
+            );
+        }
+    }
+
+    /// Apply one consensus-ordered operation to the replica. Deterministic:
+    /// given identical prior state and op, every node reaches identical state.
+    /// Operation errors (e.g. insufficient balance) are deterministic too, so
+    /// they are silently ignored — the failed op simply leaves state unchanged
+    /// on every node alike.
+    pub fn apply_op(&mut self, op: &LedgerOp) {
+        match op {
+            LedgerOp::RegisterParticipant {
+                id,
+                name,
+                public_key,
+                initial_balance,
+            } => {
+                self.register_participant_with_id(
+                    *id,
+                    name.clone(),
+                    *initial_balance,
+                    Some(*public_key),
+                );
+            }
+            LedgerOp::CreateProject {
+                owner_id,
+                name,
+                owner_encryption_pubkey,
+            } => {
+                let _ = self.create_project(*owner_id, name.clone(), *owner_encryption_pubkey);
+            }
+            LedgerOp::Transfer {
+                from,
+                to,
+                amount,
+                memo,
+            } => {
+                let _ = self.transfer(*from, *to, *amount, memo.clone());
+            }
+            LedgerOp::FundProject {
+                owner_id,
+                project_id,
+                amount,
+            } => {
+                let _ = self.fund_project_from_owner(*owner_id, *project_id, *amount);
+            }
+            LedgerOp::DonateToProject {
+                supporter_id,
+                project_id,
+                amount,
+            } => {
+                let _ = self.donate_to_project(*supporter_id, *project_id, *amount);
+            }
+            LedgerOp::SubmitTask {
+                owner_id,
+                project_id,
+                reward,
+                payload,
+            } => {
+                let _ = self.submit_task(*owner_id, *project_id, *reward, payload.clone());
+            }
+            LedgerOp::RequestTask { worker_id, .. } => {
+                let _ = self.request_task(*worker_id);
+            }
+            LedgerOp::SubmitResult {
+                worker_id,
+                task_id,
+                result_digest,
+                actual_cost,
+                encrypted_result,
+            } => {
+                let _ = self.submit_result(
+                    *worker_id,
+                    *task_id,
+                    result_digest.clone(),
+                    *actual_cost,
+                    encrypted_result.clone(),
+                );
+            }
+            LedgerOp::Tick { n } => self.tick(*n),
+        }
+    }
+
+    /// Canonical, order-independent hash of the full replicated state. Two nodes
+    /// that applied the same op log must produce the same fingerprint — this is
+    /// the convergence check used by tests and the smoke binary.
+    pub fn state_fingerprint(&self) -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update(self.current_tick.to_le_bytes());
+        h.update(self.next_project_id.to_le_bytes());
+        h.update(self.next_task_id.to_le_bytes());
+
+        let mut participants: Vec<&Participant> = self.participants.values().collect();
+        participants.sort_by_key(|p| p.id);
+        for p in participants {
+            h.update(p.id.to_le_bytes());
+            h.update(p.name.as_bytes());
+            h.update(p.reputation.to_le_bytes());
+            h.update(self.blockchain.balance_of(p.id).to_le_bytes());
+        }
+
+        let mut projects: Vec<&Project> = self.projects.values().collect();
+        projects.sort_by_key(|p| p.id);
+        for p in projects {
+            h.update(p.id.to_le_bytes());
+            h.update(p.owner_id.to_le_bytes());
+            h.update(p.quota_available.to_le_bytes());
+            h.update(p.quota_locked.to_le_bytes());
+        }
+
+        let mut tasks: Vec<&Task> = self.tasks.values().collect();
+        tasks.sort_by_key(|t| t.id);
+        for t in tasks {
+            h.update(t.id.to_le_bytes());
+            h.update(t.project_id.to_le_bytes());
+            h.update(t.reward.to_le_bytes());
+            hash_status(&mut h, &t.status);
+            for r in &t.reports {
+                h.update(r.worker_id.to_le_bytes());
+                h.update(r.result_digest.as_bytes());
+            }
+        }
+        h.finalize().into()
+    }
+
     pub fn find_participant_by_pubkey(&self, public_key: &[u8; 32]) -> Option<ParticipantId> {
         self.participants
             .values()
@@ -193,6 +347,35 @@ impl Network {
 
         self.transfer_to_project(supporter_id, project_id, amount);
         self.project_mut_or_err(project_id)?.quota_available += amount;
+        Ok(())
+    }
+
+    /// Direct token transfer between participant accounts. Checks the sender's
+    /// committed balance, then records the transfer on the economic ledger.
+    pub fn transfer(
+        &mut self,
+        from: ParticipantId,
+        to: ParticipantId,
+        amount: u64,
+        memo: impl Into<String>,
+    ) -> Result<()> {
+        let available = self.blockchain.balance_of(from);
+        if available < amount {
+            return Err(NetworkError::NotEnoughBalance {
+                participant_id: from,
+                requested: amount,
+                available,
+            });
+        }
+        self.blockchain.commit_block(
+            self.current_tick,
+            vec![Transaction::Transfer {
+                from,
+                to,
+                amount,
+                memo: memo.into(),
+            }],
+        );
         Ok(())
     }
 
@@ -729,6 +912,10 @@ impl Network {
                 expired.push(*task_id);
             }
         }
+        // HashMap iteration order is non-deterministic; sort so the emitted
+        // slash transactions (and thus block contents / replica state) are
+        // identical on every node — required for the replicated state machine.
+        expired.sort_unstable();
 
         let mut slash_txs: Vec<Transaction> = Vec::new();
         for task_id in expired {
@@ -793,6 +980,42 @@ impl Network {
     }
 }
 
+/// Canonical byte encoding of a task status into the state fingerprint hasher.
+fn hash_status(h: &mut Sha256, status: &TaskStatus) {
+    match status {
+        TaskStatus::Pending => h.update([0u8]),
+        TaskStatus::Assigned {
+            worker_id,
+            lease_expires_at_tick,
+        } => {
+            h.update([1u8]);
+            h.update(worker_id.to_le_bytes());
+            h.update(lease_expires_at_tick.to_le_bytes());
+        }
+        TaskStatus::Completed {
+            accepted_digest,
+            rewarded_workers,
+        } => {
+            h.update([2u8]);
+            h.update(accepted_digest.as_bytes());
+            for w in rewarded_workers {
+                h.update(w.to_le_bytes());
+            }
+        }
+        TaskStatus::QuotaExhausted {
+            accepted_digest,
+            reporting_workers,
+        } => {
+            h.update([3u8]);
+            h.update(accepted_digest.as_bytes());
+            for w in reporting_workers {
+                h.update(w.to_le_bytes());
+            }
+        }
+        TaskStatus::Rejected => h.update([4u8]),
+    }
+}
+
 fn distribute_reward(
     task_reward: u64,
     total_weight: u64,
@@ -832,6 +1055,115 @@ fn is_budget_exhausted_digest(digest: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::LedgerOp;
+
+    /// A representative op log touching every op kind and the multi-expired-lease
+    /// reclaim path (the determinism hot spot).
+    fn representative_log() -> Vec<LedgerOp> {
+        vec![
+            LedgerOp::RegisterParticipant {
+                id: 100,
+                name: "Owner".into(),
+                public_key: [1u8; 32],
+                initial_balance: 200,
+            },
+            LedgerOp::RegisterParticipant {
+                id: 1,
+                name: "W1".into(),
+                public_key: [2u8; 32],
+                initial_balance: 5,
+            },
+            LedgerOp::RegisterParticipant {
+                id: 2,
+                name: "W2".into(),
+                public_key: [3u8; 32],
+                initial_balance: 5,
+            },
+            LedgerOp::CreateProject {
+                owner_id: 100,
+                name: "P".into(),
+                owner_encryption_pubkey: None,
+            },
+            LedgerOp::FundProject {
+                owner_id: 100,
+                project_id: 1,
+                amount: 100,
+            },
+            LedgerOp::SubmitTask {
+                owner_id: 100,
+                project_id: 1,
+                reward: 10,
+                payload: "a".into(),
+            },
+            LedgerOp::SubmitTask {
+                owner_id: 100,
+                project_id: 1,
+                reward: 10,
+                payload: "b".into(),
+            },
+            LedgerOp::SubmitTask {
+                owner_id: 100,
+                project_id: 1,
+                reward: 10,
+                payload: "c".into(),
+            },
+            LedgerOp::RequestTask {
+                worker_id: 1,
+                nonce: 1,
+            }, // W1 → task 1
+            LedgerOp::RequestTask {
+                worker_id: 2,
+                nonce: 2,
+            }, // W2 → task 2
+            LedgerOp::SubmitResult {
+                worker_id: 1,
+                task_id: 1,
+                result_digest: "done".into(),
+                actual_cost: 0,
+                encrypted_result: None,
+            },
+            LedgerOp::RequestTask {
+                worker_id: 1,
+                nonce: 3,
+            }, // W1 → task 3
+            LedgerOp::Tick { n: 5 },                // task2 + task3 leases expire together
+        ]
+    }
+
+    fn replica(cfg: NetworkConfig, log: &[LedgerOp]) -> Network {
+        let mut net = Network::with_config(cfg);
+        for op in log {
+            net.apply_op(op);
+        }
+        net
+    }
+
+    #[test]
+    fn identical_op_log_yields_identical_state_across_replicas() {
+        let cfg = NetworkConfig {
+            consensus_quorum: 1,
+            lease_timeout_ticks: 2,
+            lease_slash: 1,
+            ..NetworkConfig::default()
+        };
+        let log = representative_log();
+
+        let reference = replica(cfg, &log).state_fingerprint();
+        // Many independent replicas applying the same ordered log must converge.
+        for _ in 0..5 {
+            assert_eq!(replica(cfg, &log).state_fingerprint(), reference);
+        }
+        // Sanity: the log actually produced non-trivial state.
+        assert_ne!(reference, Network::with_config(cfg).state_fingerprint());
+
+        // Spot-check the deterministic outcome: task 1 finalized, W1 rewarded.
+        let net = replica(cfg, &log);
+        assert!(matches!(
+            net.task(1).unwrap().status,
+            TaskStatus::Completed { .. }
+        ));
+        assert!(net.blockchain().verify_integrity());
+    }
 
     #[test]
     fn donation_reduces_supporter_balance_and_increases_project_quota() {
