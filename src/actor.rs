@@ -808,6 +808,27 @@ async fn run_role_node(
     }
 
     let mut executor_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Workers run the executor automatically after connecting. Coordinators can
+    // still start one manually (StartExecutor) for local validation.
+    if role == NodeRole::Worker {
+        let h = tokio::spawn(ops_executor_loop(
+            my_addr,
+            95,
+            2,
+            crate::sandbox::default_allowed_packages(),
+            Arc::clone(&engine),
+            Arc::clone(&peers),
+            Arc::clone(&seen),
+            evt_tx.clone(),
+        ));
+        executor_handle = Some(h);
+        let _ = evt_tx.send(AppEvent::ExecutorStarted).await;
+        let _ = evt_tx
+            .send(AppEvent::Log("Executor started".to_string()))
+            .await;
+    }
+
     let mut round = tokio::time::interval(Duration::from_millis(500));
     let mut sync_timer = tokio::time::interval(Duration::from_secs(3));
     let mut tick_timer = tokio::time::interval(Duration::from_secs(1));
