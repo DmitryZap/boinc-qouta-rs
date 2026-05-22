@@ -1,11 +1,11 @@
 pub mod actor;
 pub mod app;
 pub mod blockchain;
-pub mod compute;
 pub mod estimator;
 pub mod executor;
 pub mod identity;
 pub mod model;
 pub mod network;
+pub mod pyenv;
 pub mod protocol;
 pub mod sandbox;

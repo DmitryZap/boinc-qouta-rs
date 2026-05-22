@@ -1,28 +1,30 @@
-use crate::compute::{ComputeError, ComputeModule, ResourceConfig};
-use crate::estimator::{Estimator, ResourceMetrics};
+use crate::estimator::{Estimator, EstimatorError, ResourceMetrics};
 use crate::identity::Identity;
 use crate::model::ParticipantId;
 use crate::network::{Network, NetworkError, Result as NetworkResult};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64, Engine as _};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-const GPU_IMAGE: &str = "pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime";
+/// Default wall-clock cap handed to the isolated interpreter when no budget
+/// override applies.
+const DEFAULT_TIMEOUT_SECS: u64 = 10;
 
 /// Computed task result: digest used for consensus, plus the raw stdout
-/// captured during execution (used for encrypted-result delivery).
+/// captured during execution (used for encrypted-result delivery) and the
+/// dynamic resource metrics measured by the interpreter.
 #[derive(Debug, Clone)]
 pub struct ComputedResult {
     pub digest: String,
     pub stdout: String,
     pub budget_exhausted: bool,
+    pub metrics: ResourceMetrics,
 }
 
 enum Payload<'a> {
     Python { code_b64: &'a str, gpu: bool },
-    Inference(&'a str),
-    Deterministic(&'a str),
+    Unknown,
 }
 
 struct ExecutionBudget {
@@ -37,9 +39,9 @@ pub struct Executor {
     reliability_percent: u8,
     compute_ticks: u64,
     heartbeat_interval_ticks: u64,
-    resource_config: ResourceConfig,
-    compute_module: Option<Arc<ComputeModule>>,
     estimator: Option<Arc<Estimator>>,
+    /// User-managed import allowlist passed to the isolated interpreter.
+    allowed_packages: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,21 +68,16 @@ impl Executor {
         reliability_percent: u8,
         compute_ticks: u64,
         heartbeat_interval_ticks: u64,
+        allowed_packages: Vec<String>,
     ) -> Self {
-        let resource_config = ResourceConfig::default();
-        let compute_module = ComputeModule::new(resource_config.clone())
-            .map(Arc::new)
-            .map_err(|e| eprintln!("[executor] Docker unavailable: {e}. Using fake compute."))
-            .ok();
         Self {
             worker_id,
             label: label.into(),
             reliability_percent: reliability_percent.min(100),
             compute_ticks: compute_ticks.max(1),
             heartbeat_interval_ticks,
-            resource_config,
-            compute_module,
             estimator: Some(Arc::new(Estimator::default())),
+            allowed_packages,
         }
     }
 
@@ -173,10 +170,9 @@ impl Executor {
         payload: &str,
         reward: u64,
     ) -> (ComputedResult, u64) {
-        let started_at = Instant::now();
         let result =
             self.compute_result_with_budget(task_id, payload, Some(ExecutionBudget { reward }));
-        let actual_cost = self.actual_cost(started_at.elapsed(), reward, result.budget_exhausted);
+        let actual_cost = self.actual_cost(&result.metrics, reward, result.budget_exhausted);
         (result, actual_cost)
     }
 
@@ -190,12 +186,16 @@ impl Executor {
             Payload::Python { code_b64, gpu } => {
                 self.run_python_payload(task_id, code_b64, gpu, budget)
             }
-            Payload::Inference(features) => self.run_inference_payload(task_id, features),
-            Payload::Deterministic(text) => self.run_deterministic_payload(task_id, text),
+            Payload::Unknown => digest_only(format!("error:unknown-payload-{task_id:x}")),
         }
     }
 
-
+    /// Run a Python payload in the isolated interpreter (single execution path).
+    ///
+    /// The former GPU/Docker branches are gone: `python-gpu:` payloads run
+    /// through the same interpreter (no real GPU). The interpreter enforces the
+    /// import allowlist, blocks submodule access, and caps operations so
+    /// infinite loops surface as a timeout/budget-exhausted result.
     fn run_python_payload(
         &self,
         task_id: u64,
@@ -210,179 +210,52 @@ impl Executor {
         };
 
         let budgeted = budget.is_some();
-        let resource_config = self.estimate_python_execution(&code, budget);
+        let timeout_secs = self.python_timeout(&code, budget);
 
-        if !gpu && self.generates_corrupted_result(task_id, b64_code) {
+        if self.generates_corrupted_result(task_id, b64_code) {
             return digest_only(format!("{prefix}-corrupt-{task_id:x}"));
         }
 
-        if gpu {
-            return self.run_python_gpu_source(task_id, &code, &resource_config, budgeted);
-        }
-
-        let Some(module) = &self.compute_module else {
-            return self.run_python_without_docker(
-                task_id,
-                prefix,
-                &code,
-                &resource_config,
-                budgeted,
-            );
-        };
-
-        let fut = module.execute_python(&code, self.worker_id, task_id, &resource_config);
-        let result = block_on_compute(fut);
-
-        match result {
-            Ok(output) => ComputedResult {
-                digest: Self::digest_from_stdout(&output.stdout),
-                stdout: output.stdout,
-                budget_exhausted: false,
-            },
-            Err(ComputeError::Timeout(partial)) => {
-                python_timeout_result(prefix, task_id, budgeted, partial.stdout)
-            }
-            Err(ComputeError::NonZeroExit(r)) => {
-                let d = format!("python-nonzero-{}-{task_id:x}", r.exit_code);
-                ComputedResult {
-                    stdout: r.stdout.clone(),
-                    digest: d,
-                    budget_exhausted: false,
-                }
-            }
-            Err(e) => {
-                eprintln!("[executor] Docker error: {e}. Falling back to sandbox.");
-                self.run_python_without_docker(task_id, prefix, &code, &resource_config, budgeted)
-            }
-        }
-    }
-
-    fn run_python_gpu_source(
-        &self,
-        task_id: u64,
-        code: &str,
-        resource_config: &ResourceConfig,
-        budgeted: bool,
-    ) -> ComputedResult {
-        let Some(module) = &self.compute_module else {
-            return digest_only(format!("python-gpu-no-docker-{task_id:x}"));
-        };
-
-        let fut =
-            module.execute_python_gpu(code, self.worker_id, task_id, resource_config, GPU_IMAGE);
-        let result = block_on_compute(fut);
-
-        match result {
-            Ok(output) => ComputedResult {
-                digest: Self::digest_from_stdout(&output.stdout),
-                stdout: output.stdout,
-                budget_exhausted: false,
-            },
-            Err(crate::compute::ComputeError::Timeout(partial)) => {
-                python_timeout_result("python-gpu", task_id, budgeted, partial.stdout)
-            }
-            Err(crate::compute::ComputeError::NonZeroExit(r)) => {
-                let d = format!("python-gpu-nonzero-{}-{task_id:x}", r.exit_code);
-                let stdout = if r.stdout.trim().is_empty() {
-                    r.stderr.clone()
-                } else if r.stderr.trim().is_empty() {
-                    r.stdout.clone()
-                } else {
-                    format!("{}\n{}", r.stdout.trim_end(), r.stderr.trim_end())
-                };
-                ComputedResult {
-                    stdout,
-                    digest: d,
-                    budget_exhausted: false,
-                }
-            }
-            Err(e) => {
-                eprintln!("[executor] GPU docker error: {e}");
-                digest_only(format!("python-gpu-error-{task_id:x}"))
-            }
-        }
-    }
-
-    fn estimate_python_execution(
-        &self,
-        code: &str,
-        budget: Option<ExecutionBudget>,
-    ) -> ResourceConfig {
-        let mut config = self.resource_config.clone();
         let Some(estimator) = &self.estimator else {
-            return config;
+            return self.run_python_via_sandbox(task_id, prefix, &code, timeout_secs, budgeted);
         };
 
-        if let Some(budget) = budget {
-            config.timeout_secs = estimator.timeout_for_budget(budget.reward);
-            return config;
-        }
-
-        let estimate = estimator.estimate_python(code);
-        config.timeout_secs = estimate
-            .suggested_timeout_secs
-            .clamp(1, self.resource_config.timeout_secs.max(1));
-        config
-    }
-
-    fn run_python_without_docker(
-        &self,
-        task_id: u64,
-        prefix: &str,
-        code: &str,
-        resource_config: &ResourceConfig,
-        budgeted: bool,
-    ) -> ComputedResult {
-        let Some(estimator) = &self.estimator else {
-            return Self::run_python_via_sandbox(
-                task_id,
-                code,
-                resource_config.timeout_secs,
-                budgeted,
-            );
-        };
-
-        match estimator.run_and_measure_output_with_timeout(
-            code,
-            Duration::from_secs(resource_config.timeout_secs),
+        match estimator.measure_via_sandbox(
+            &code,
+            Duration::from_secs(timeout_secs),
+            &self.allowed_packages,
         ) {
             Ok(run) => ComputedResult {
                 digest: Self::digest_from_stdout(&run.stdout),
                 stdout: run.stdout,
                 budget_exhausted: false,
+                metrics: run.metrics,
             },
-            Err(crate::estimator::EstimatorError::Timeout(partial)) => {
-                python_timeout_result(prefix, task_id, budgeted, partial.stdout)
+            Err(EstimatorError::Timeout(partial)) => {
+                python_timeout_result(prefix, task_id, budgeted, partial.stdout, partial.metrics)
             }
             Err(e) => {
-                eprintln!("[executor] Python subprocess failed: {e}. Falling back to sandbox.");
-                Self::run_python_via_sandbox(task_id, code, resource_config.timeout_secs, budgeted)
+                eprintln!("[executor] Interpreter failed: {e}");
+                digest_only(format!("{prefix}-sandbox-error-{task_id:x}"))
             }
         }
     }
 
-    fn run_inference_payload(&self, task_id: u64, payload: &str) -> ComputedResult {
-        let Some((predicted_class, confidence)) = Self::inference_prediction(payload) else {
-            return self.run_deterministic_payload(task_id, payload);
+    /// Wall-clock cap for the interpreter: derived from the reward budget when
+    /// running a task, otherwise from the static estimate.
+    fn python_timeout(&self, code: &str, budget: Option<ExecutionBudget>) -> u64 {
+        let Some(estimator) = &self.estimator else {
+            return DEFAULT_TIMEOUT_SECS;
         };
 
-        let class = if self.generates_corrupted_result(task_id, payload) {
-            1usize.saturating_sub(predicted_class.min(1))
-        } else {
-            predicted_class
-        };
-        digest_only(format!("infer:class={class};confidence={confidence:.4}"))
-    }
+        if let Some(budget) = budget {
+            return estimator.timeout_for_budget(budget.reward);
+        }
 
-    fn run_deterministic_payload(&self, task_id: u64, payload: &str) -> ComputedResult {
-        let payload_score: u64 = payload.bytes().map(u64::from).sum();
-        let baseline = payload_score ^ (task_id * 31);
-        let digest = if self.generates_corrupted_result(task_id, payload) {
-            format!("digest-bad-{:x}", baseline ^ 0x9e3779b97f4a7c15)
-        } else {
-            format!("digest-ok-{baseline:x}")
-        };
-        digest_only(digest)
+        estimator
+            .estimate_python(code)
+            .suggested_timeout_secs
+            .clamp(1, DEFAULT_TIMEOUT_SECS)
     }
 
     fn decode_python_source(
@@ -406,76 +279,42 @@ impl Executor {
         format!("python-ok-{digest:016x}")
     }
 
+    /// Fallback when no estimator is attached: run the interpreter directly
+    /// without dynamic metrics.
     fn run_python_via_sandbox(
+        &self,
         task_id: u64,
+        prefix: &str,
         code: &str,
         timeout_secs: u64,
         budgeted: bool,
     ) -> ComputedResult {
-        match crate::sandbox::run_python_sandboxed(code, timeout_secs) {
+        match crate::sandbox::run_python_sandboxed(code, timeout_secs, &self.allowed_packages) {
             Ok(result) => ComputedResult {
                 digest: Self::digest_from_stdout(&result.stdout),
                 stdout: result.stdout,
                 budget_exhausted: false,
+                metrics: ResourceMetrics::default(),
             },
             Err(crate::sandbox::SandboxError::Timeout) => {
-                python_timeout_result("python", task_id, budgeted, String::new())
+                python_timeout_result(prefix, task_id, budgeted, String::new(), ResourceMetrics::default())
             }
             Err(e) => {
                 eprintln!("[executor] Sandbox failed: {e}");
-                let d = format!("python-sandbox-error-{task_id:x}");
-                ComputedResult {
-                    stdout: d.clone(),
-                    digest: d,
-                    budget_exhausted: false,
-                }
+                digest_only(format!("{prefix}-sandbox-error-{task_id:x}"))
             }
         }
     }
 
-    fn actual_cost(&self, elapsed: Duration, reward: u64, budget_exhausted: bool) -> u64 {
+    fn actual_cost(&self, metrics: &ResourceMetrics, reward: u64, budget_exhausted: bool) -> u64 {
         if budget_exhausted {
             return reward;
         }
 
         self.estimator
             .as_ref()
-            .map(|est| {
-                est.calculate_cost(&ResourceMetrics {
-                    cpu_seconds: elapsed.as_secs_f64(),
-                    peak_memory_mb: 0,
-                    wall_clock_seconds: elapsed.as_secs_f64(),
-                })
-                .min(reward)
-            })
+            .map(|est| est.calculate_cost(metrics).min(reward))
             .unwrap_or(0)
-    }
-
-    fn inference_prediction(payload: &str) -> Option<(usize, f32)> {
-        let features = payload.strip_prefix("infer:")?;
-        let mut parsed = [0.0_f32; 3];
-        let mut count = 0usize;
-        for chunk in features.split(',') {
-            if count >= parsed.len() {
-                return None;
-            }
-            parsed[count] = chunk.trim().parse::<f32>().ok()?;
-            count += 1;
-        }
-        if count != parsed.len() {
-            return None;
-        }
-
-        let h1 = (0.8 * parsed[0] - 0.4 * parsed[1] + 0.3 * parsed[2] + 0.1).max(0.0);
-        let h2 = (-0.2 * parsed[0] + 0.9 * parsed[1] + 0.5 * parsed[2] - 0.3).max(0.0);
-        let logits = [1.2 * h1 - 0.7 * h2 + 0.2, -0.6 * h1 + 1.1 * h2 - 0.1];
-        let (predicted_class, confidence) = if logits[0] >= logits[1] {
-            (0, sigmoid(logits[0] - logits[1]))
-        } else {
-            (1, sigmoid(logits[1] - logits[0]))
-        };
-
-        Some((predicted_class, confidence))
     }
 
     fn generates_corrupted_result(&self, task_id: u64, payload: &str) -> bool {
@@ -502,11 +341,7 @@ impl<'a> Payload<'a> {
             };
         }
 
-        if payload.starts_with("infer:") {
-            return Self::Inference(payload);
-        }
-
-        Self::Deterministic(payload)
+        Self::Unknown
     }
 }
 
@@ -515,6 +350,7 @@ fn digest_only(digest: String) -> ComputedResult {
         stdout: digest.clone(),
         digest,
         budget_exhausted: false,
+        metrics: ResourceMetrics::default(),
     }
 }
 
@@ -523,6 +359,7 @@ fn python_timeout_result(
     task_id: u64,
     budgeted: bool,
     partial_stdout: String,
+    metrics: ResourceMetrics,
 ) -> ComputedResult {
     let reason = if budgeted {
         "budget-exhausted"
@@ -539,25 +376,8 @@ fn python_timeout_result(
         stdout,
         digest,
         budget_exhausted: budgeted,
+        metrics,
     }
-}
-
-fn block_on_compute<F, T>(future: F) -> T
-where
-    F: std::future::Future<Output = T>,
-{
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
-        Err(_) => tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime")
-            .block_on(future),
-    }
-}
-
-fn sigmoid(x: f32) -> f32 {
-    1.0 / (1.0 + (-x).exp())
 }
 
 #[cfg(test)]
@@ -573,12 +393,13 @@ mod tests {
         let project = network.create_project(owner, "Physics", None).unwrap();
 
         network.fund_project_from_owner(owner, project, 20).unwrap();
+        let payload = format!("python:{}", BASE64.encode("print('result-1')"));
         network
-            .submit_task(owner, project, 10, "simulate-1")
+            .submit_task(owner, project, 10, &payload)
             .unwrap();
 
-        let executor = Executor::new(worker, "w1", 100, 1, 1);
-        let validator_executor = Executor::new(validator, "w2", 100, 1, 1);
+        let executor = Executor::new(worker, "w1", 100, 1, 1, crate::sandbox::default_allowed_packages());
+        let validator_executor = Executor::new(validator, "w2", 100, 1, 1, crate::sandbox::default_allowed_packages());
         let event = executor.process_next_task(&mut network).unwrap();
         validator_executor.process_next_task(&mut network).unwrap();
 
@@ -601,11 +422,12 @@ mod tests {
         let project = network.create_project(owner, "Bio", None).unwrap();
 
         network.fund_project_from_owner(owner, project, 20).unwrap();
+        let payload = format!("python:{}", BASE64.encode("print('result-2')"));
         network
-            .submit_task(owner, project, 10, "simulate-2")
+            .submit_task(owner, project, 10, &payload)
             .unwrap();
 
-        let executor = Executor::new(worker, "w2", 100, 5, 0);
+        let executor = Executor::new(worker, "w2", 100, 5, 0, crate::sandbox::default_allowed_packages());
         let event = executor.process_next_task(&mut network).unwrap();
 
         assert!(matches!(
@@ -624,7 +446,7 @@ mod tests {
     fn executor_becomes_idle_when_no_tasks_left() {
         let mut network = Network::new();
         let worker = network.register_participant("Worker", 0, None);
-        let executor = Executor::new(worker, "w3", 100, 1, 1);
+        let executor = Executor::new(worker, "w3", 100, 1, 1, crate::sandbox::default_allowed_packages());
 
         let event = executor.process_next_task(&mut network).unwrap();
         assert_eq!(event, ExecutorEvent::Idle);
@@ -632,7 +454,7 @@ mod tests {
 
     #[test]
     fn reward_budget_stops_obvious_infinite_python() {
-        let executor = Executor::new(1, "w4", 100, 1, 1);
+        let executor = Executor::new(1, "w4", 100, 1, 1, crate::sandbox::default_allowed_packages());
         let payload = format!("python:{}", BASE64.encode("while True:\n    pass\n"));
 
         let (result, actual_cost) = executor.execute_task_payload(42, &payload, 1);

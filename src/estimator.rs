@@ -1,14 +1,15 @@
+use crate::sandbox::{self, SandboxError};
 use sha2::{Digest, Sha256};
-use std::io::Read;
-use std::io::Write;
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-use tempfile::NamedTempFile;
 
 const DEFAULT_RUN_TIMEOUT_SECS: u64 = 10;
 const MIN_SUGGESTED_TIMEOUT_SECS: u64 = 1;
 
-#[derive(Debug, Clone)]
+/// Interpreter operations treated as one CPU-second of work. The isolated
+/// interpreter caps loops at ~1M operations, so 1M ops ≈ one second of budget.
+const OPS_PER_CPU_SEC: f64 = 1_000_000.0;
+
+#[derive(Debug, Clone, Default)]
 pub struct ResourceMetrics {
     pub cpu_seconds: f64,
     pub peak_memory_mb: u64,
@@ -37,24 +38,17 @@ impl Default for CostConfig {
 
 #[derive(Debug)]
 pub enum EstimatorError {
-    Io(std::io::Error),
-    PythonNotFound,
+    /// Interpreter op-cap or wall-clock timeout tripped; partial run attached.
     Timeout(MeasuredRun),
-    ScriptFailed {
-        exit_code: Option<i32>,
-        stderr: String,
-    },
+    /// Interpreter could not run the code (e.g. smolagents unavailable).
+    Sandbox(String),
 }
 
 impl std::fmt::Display for EstimatorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Io(e) => write!(f, "io: {e}"),
-            Self::PythonNotFound => write!(f, "python3 not found"),
             Self::Timeout(_) => write!(f, "script timed out"),
-            Self::ScriptFailed { exit_code, stderr } => {
-                write!(f, "script failed (exit={exit_code:?}): {stderr}")
-            }
+            Self::Sandbox(msg) => write!(f, "sandbox: {msg}"),
         }
     }
 }
@@ -139,8 +133,8 @@ impl Estimator {
             .saturating_add(mem_cost)
     }
 
-    /// Execute Python source in a subprocess, measure resource usage, return
-    /// a SHA-256 digest of stdout and the observed ResourceMetrics.
+    /// Execute Python source in the isolated interpreter, measure work done,
+    /// return a SHA-256 digest of stdout and the observed ResourceMetrics.
     pub fn run_and_measure(
         &self,
         source: &str,
@@ -153,93 +147,50 @@ impl Estimator {
         source: &str,
         timeout: Duration,
     ) -> Result<(String, ResourceMetrics), EstimatorError> {
-        let run = self.run_and_measure_output_with_timeout(source, timeout)?;
+        let run =
+            self.measure_via_sandbox(source, timeout, &sandbox::default_allowed_packages())?;
         Ok((run.digest, run.metrics))
     }
 
-    pub fn run_and_measure_output_with_timeout(
+    /// Run `source` in the isolated interpreter and derive dynamic
+    /// `ResourceMetrics` from the actual execution: the interpreter's operation
+    /// counter (deterministic, execution-path dependent) maps to CPU-seconds,
+    /// and wall-clock is measured around the call. `allowed_packages` is the
+    /// user-managed import allowlist handed to the interpreter.
+    pub fn measure_via_sandbox(
         &self,
         source: &str,
         timeout: Duration,
+        allowed_packages: &[String],
     ) -> Result<MeasuredRun, EstimatorError> {
-        let mut tmp = NamedTempFile::new().map_err(EstimatorError::Io)?;
-        tmp.write_all(source.as_bytes())
-            .map_err(EstimatorError::Io)?;
-        tmp.flush().map_err(EstimatorError::Io)?;
-
         let start = Instant::now();
-        let mut child = Command::new("python3")
-            .arg(tmp.path())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    EstimatorError::PythonNotFound
-                } else {
-                    EstimatorError::Io(e)
-                }
-            })?;
-
-        let deadline = Instant::now() + timeout;
-        loop {
-            if child.try_wait().map_err(EstimatorError::Io)?.is_some() {
-                break;
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                let mut stdout = Vec::new();
-                if let Some(mut pipe) = child.stdout.take() {
-                    pipe.read_to_end(&mut stdout).map_err(EstimatorError::Io)?;
-                }
+        match sandbox::run_python_sandboxed(source, timeout.as_secs().max(1), allowed_packages) {
+            Ok(result) => {
                 let wall_clock_seconds = start.elapsed().as_secs_f64();
-                let (cpu_seconds, peak_memory_mb) = measure_rusage();
-                let digest = digest_stdout(&stdout);
-                return Err(EstimatorError::Timeout(MeasuredRun {
-                    digest,
-                    stdout: String::from_utf8_lossy(&stdout).into_owned(),
+                Ok(MeasuredRun {
+                    digest: digest_stdout(result.stdout.as_bytes()),
+                    stdout: result.stdout,
                     metrics: ResourceMetrics {
-                        cpu_seconds,
-                        peak_memory_mb,
+                        cpu_seconds: result.operations as f64 / OPS_PER_CPU_SEC,
+                        peak_memory_mb: 0,
                         wall_clock_seconds,
                     },
-                }));
+                })
             }
-            std::thread::sleep(Duration::from_millis(10));
+            Err(SandboxError::Timeout) => {
+                let wall_clock_seconds = start.elapsed().as_secs_f64();
+                Err(EstimatorError::Timeout(MeasuredRun {
+                    digest: digest_stdout(b""),
+                    stdout: String::new(),
+                    metrics: ResourceMetrics {
+                        cpu_seconds: wall_clock_seconds,
+                        peak_memory_mb: 0,
+                        wall_clock_seconds,
+                    },
+                }))
+            }
+            Err(e) => Err(EstimatorError::Sandbox(e.to_string())),
         }
-
-        let mut stdout = Vec::new();
-        if let Some(mut pipe) = child.stdout.take() {
-            pipe.read_to_end(&mut stdout).map_err(EstimatorError::Io)?;
-        }
-        let mut stderr = Vec::new();
-        if let Some(mut pipe) = child.stderr.take() {
-            pipe.read_to_end(&mut stderr).map_err(EstimatorError::Io)?;
-        }
-        let status = child.wait().map_err(EstimatorError::Io)?;
-        let wall_clock_seconds = start.elapsed().as_secs_f64();
-
-        if !status.success() {
-            return Err(EstimatorError::ScriptFailed {
-                exit_code: status.code(),
-                stderr: String::from_utf8_lossy(&stderr).into_owned(),
-            });
-        }
-
-        let (cpu_seconds, peak_memory_mb) = measure_rusage();
-
-        let digest = digest_stdout(&stdout);
-
-        Ok(MeasuredRun {
-            digest,
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            metrics: ResourceMetrics {
-                cpu_seconds,
-                peak_memory_mb,
-                wall_clock_seconds,
-            },
-        })
     }
 
     pub fn timeout_for_budget(&self, reward: u64) -> u64 {
@@ -285,31 +236,14 @@ fn digest_stdout(stdout: &[u8]) -> String {
     format!("py-{:x}", hasher.finalize())
 }
 
-#[cfg(unix)]
-fn measure_rusage() -> (f64, u64) {
-    unsafe {
-        let mut usage = std::mem::zeroed::<libc::rusage>();
-        if libc::getrusage(libc::RUSAGE_CHILDREN, &mut usage) == 0 {
-            let cpu_seconds = usage.ru_utime.tv_sec as f64
-                + usage.ru_utime.tv_usec as f64 / 1_000_000.0
-                + usage.ru_stime.tv_sec as f64
-                + usage.ru_stime.tv_usec as f64 / 1_000_000.0;
-            // macOS reports ru_maxrss in bytes; Linux in kilobytes.
-            #[cfg(target_os = "macos")]
-            let peak_memory_mb = (usage.ru_maxrss as u64) / (1024 * 1024);
-            #[cfg(not(target_os = "macos"))]
-            let peak_memory_mb = (usage.ru_maxrss as u64) / 1024;
-            (cpu_seconds, peak_memory_mb)
-        } else {
-            (0.0, 0)
-        }
-    }
-}
 
-#[cfg(not(unix))]
-fn measure_rusage() -> (f64, u64) {
-    (0.0, 0)
-}
+// TODO: Выставлять ограничение по времени выполнения таски
+// Slurm 
+
+////
+/// Подумать над ключевой особенностью проекта.
+/// 
+
 
 #[cfg(test)]
 mod tests {
@@ -345,7 +279,7 @@ mod tests {
     fn run_and_measure_times_out() {
         let est = Estimator::default();
         let err = est
-            .run_and_measure_with_timeout("while True:\n    pass\n", Duration::from_millis(50))
+            .run_and_measure_with_timeout("while True:\n    pass\n", Duration::from_secs(30))
             .unwrap_err();
         assert!(matches!(err, EstimatorError::Timeout(_)));
     }
@@ -354,32 +288,18 @@ mod tests {
     fn run_and_measure_simple_script() {
         let est = Estimator::default();
         let script = "print(sum(range(100)))\n";
-        match est.run_and_measure(script) {
-            Ok((digest, metrics)) => {
-                assert!(digest.starts_with("py-"), "digest={digest}");
-                assert!(metrics.wall_clock_seconds >= 0.0);
-            }
-            Err(EstimatorError::PythonNotFound) => {
-                eprintln!("python3 not found — skipping");
-            }
-            Err(e) => panic!("unexpected error: {e}"),
-        }
+        let (digest, metrics) = est.run_and_measure(script).expect("run");
+        assert!(digest.starts_with("py-"), "digest={digest}");
+        assert!(metrics.wall_clock_seconds >= 0.0);
+        assert!(metrics.cpu_seconds >= 0.0);
     }
 
     #[test]
     fn run_and_measure_deterministic_digest() {
         let est = Estimator::default();
         let script = "print(42)\n";
-        let r1 = est.run_and_measure(script);
-        let r2 = est.run_and_measure(script);
-        match (r1, r2) {
-            (Ok((d1, _)), Ok((d2, _))) => {
-                assert_eq!(d1, d2, "same script must produce same digest")
-            }
-            (Err(EstimatorError::PythonNotFound), _) | (_, Err(EstimatorError::PythonNotFound)) => {
-                eprintln!("python3 not found — skipping");
-            }
-            (Err(e), _) | (_, Err(e)) => panic!("unexpected error: {e}"),
-        }
+        let (d1, _) = est.run_and_measure(script).expect("run1");
+        let (d2, _) = est.run_and_measure(script).expect("run2");
+        assert_eq!(d1, d2, "same script must produce same digest");
     }
 }

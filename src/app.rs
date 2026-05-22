@@ -16,7 +16,6 @@ use style::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PayloadMode {
-    Text,
     Python,
     GpuPython,
 }
@@ -27,6 +26,7 @@ enum Tab {
     Projects,
     Tasks,
     Executor,
+    Packages,
     Network,
 }
 
@@ -74,7 +74,6 @@ pub struct BoincApp {
     task_project_id: String,
     task_project_selected: Option<u64>,
     task_reward: String,
-    task_payload: String,
     task_payload_mode: PayloadMode,
     task_code: String,
     task_filter: TaskFilter,
@@ -87,6 +86,10 @@ pub struct BoincApp {
     // Executor tab
     exec_reliability: u8,
     exec_compute_ticks: u64,
+
+    // Packages tab — user-managed import allowlist for the isolated interpreter
+    exec_allowed_packages: Vec<String>,
+    exec_new_package_input: String,
 
     quick_demo_done: bool,
     quorum_input: String,
@@ -134,12 +137,13 @@ impl BoincApp {
             task_project_id: String::new(),
             task_project_selected: None,
             task_reward: "10".to_string(),
-            task_payload: "compute-001".to_string(),
-            task_payload_mode: PayloadMode::Text,
+            task_payload_mode: PayloadMode::Python,
             task_code: "print('hello from BOINC')".to_string(),
             task_filter: TaskFilter::All,
             exec_reliability: 95,
             exec_compute_ticks: 2,
+            exec_allowed_packages: crate::sandbox::default_allowed_packages(),
+            exec_new_package_input: String::new(),
             quick_demo_done: false,
             quorum_input: "2".to_string(),
             batch_range_start: "2".to_string(),
@@ -160,7 +164,6 @@ impl BoincApp {
 
     fn task_payload_for_submit(&self) -> String {
         match self.task_payload_mode {
-            PayloadMode::Text => self.task_payload.clone(),
             PayloadMode::Python => format!("python:{}", BASE64.encode(&self.task_code)),
             PayloadMode::GpuPython => format!("python-gpu:{}", BASE64.encode(&self.task_code)),
         }
@@ -416,6 +419,7 @@ impl eframe::App for BoincApp {
                         (Tab::Connect, "Connect"),
                         (Tab::Tasks, "Tasks"),
                         (Tab::Executor, "Executor"),
+                        (Tab::Packages, "Packages"),
                         (Tab::Network, "Network"),
                     ],
                 };
@@ -503,6 +507,7 @@ impl eframe::App for BoincApp {
                 Tab::Projects => self.draw_projects_tab(ui),
                 Tab::Tasks => self.draw_tasks_tab(ui),
                 Tab::Executor => self.draw_executor_tab(ui),
+                Tab::Packages => self.draw_packages_tab(ui),
                 Tab::Network => self.draw_network_tab(ui),
             });
     }
@@ -928,12 +933,6 @@ impl BoincApp {
                     ui.add_space(4.0);
                     ui.label(RichText::new("Payload type").size(11.0).color(TEXT_SEC));
                     ui.horizontal(|ui| {
-                        let text_on = self.task_payload_mode == PayloadMode::Text;
-                        if ui.add_sized([80.0, 28.0], Button::new(
-                            RichText::new("Text").color(if text_on { BG_APP } else { TEXT_SEC }),
-                        ).fill(if text_on { ACCENT } else { BG_CARD })).clicked() {
-                            self.task_payload_mode = PayloadMode::Text;
-                        }
                         let py_on = self.task_payload_mode == PayloadMode::Python;
                         if ui.add_sized([80.0, 28.0], Button::new(
                             RichText::new("Python").color(if py_on { BG_APP } else { TEXT_SEC }),
@@ -949,36 +948,30 @@ impl BoincApp {
                     });
 
                     ui.add_space(4.0);
-                    match self.task_payload_mode {
-                        PayloadMode::Text => {
-                            ui.label(RichText::new("Payload").size(11.0).color(TEXT_SEC));
-                            ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut self.task_payload));
+                    {
+                        let is_gpu = self.task_payload_mode == PayloadMode::GpuPython;
+                        if is_gpu {
+                            ui.label(RichText::new("GPU mode: runs in pytorch Docker with --gpus all").size(11.0).color(Color32::from_rgb(120, 200, 255)));
                         }
-                        PayloadMode::Python | PayloadMode::GpuPython => {
-                            let is_gpu = self.task_payload_mode == PayloadMode::GpuPython;
-                            if is_gpu {
-                                ui.label(RichText::new("GPU mode: runs in pytorch Docker with --gpus all").size(11.0).color(Color32::from_rgb(120, 200, 255)));
-                            }
-                            ui.label(RichText::new("Python code").size(11.0).color(TEXT_SEC));
-                            egui::ScrollArea::vertical()
-                                .id_salt("code_editor_scroll")
-                                .max_height(120.0)
-                                .show(ui, |ui| {
-                                    ui.add(egui::TextEdit::multiline(&mut self.task_code)
-                                        .font(egui::TextStyle::Monospace)
-                                        .desired_width(f32::INFINITY)
-                                        .desired_rows(6));
-                                });
-                            ui.horizontal(|ui| {
-                                if !is_gpu {
-                                    if ui.small_button("Prime check").clicked() { self.task_code = PRIME_CHECK_TEMPLATE.to_string(); }
-                                    if ui.small_button("Prime chunk").clicked() { self.task_code = PRIME_CHUNK_TEMPLATE.to_string(); }
-                                } else {
-                                    if ui.small_button("PyTorch matmul").clicked() { self.task_code = GPU_PYTORCH_TEMPLATE.to_string(); }
-                                }
+                        ui.label(RichText::new("Python code").size(11.0).color(TEXT_SEC));
+                        egui::ScrollArea::vertical()
+                            .id_salt("code_editor_scroll")
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                                ui.add(egui::TextEdit::multiline(&mut self.task_code)
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(6));
                             });
-                            ui.label(RichText::new(format!("Will encode {} bytes with base64", self.task_code.len())).size(10.0).color(C_MUTED));
-                        }
+                        ui.horizontal(|ui| {
+                            if !is_gpu {
+                                if ui.small_button("Prime check").clicked() { self.task_code = PRIME_CHECK_TEMPLATE.to_string(); }
+                                if ui.small_button("Prime chunk").clicked() { self.task_code = PRIME_CHUNK_TEMPLATE.to_string(); }
+                            } else {
+                                if ui.small_button("PyTorch matmul").clicked() { self.task_code = GPU_PYTORCH_TEMPLATE.to_string(); }
+                            }
+                        });
+                        ui.label(RichText::new(format!("Will encode {} bytes with base64", self.task_code.len())).size(10.0).color(C_MUTED));
                     }
 
                     ui.add_space(4.0);
@@ -1402,6 +1395,7 @@ impl BoincApp {
                     self.send(AppCommand::StartExecutor {
                         reliability: self.exec_reliability,
                         compute_ticks: self.exec_compute_ticks,
+                        allowed_packages: self.exec_allowed_packages.clone(),
                     });
                 }
             });
@@ -1438,6 +1432,99 @@ impl BoincApp {
                 }
             }
         });
+    }
+
+    // ── Packages tab ─────────────────────────────────────────────────────────
+    fn draw_packages_tab(&mut self, ui: &mut egui::Ui) {
+        card_frame()
+            .fill(Color32::from_rgba_unmultiplied(210, 153, 34, 20))
+            .show(ui, |ui| {
+                ui.label(RichText::new("ℹ These are additional imports allowed in the isolated interpreter, on top of a safe stdlib baseline (math, random, datetime, collections, re, …). Submodule access (e.g. random._os) is always blocked. Changes apply when you (re)start the executor.")
+                    .size(12.0).color(C_WARNING));
+            });
+        ui.add_space(10.0);
+
+        // ── Add a package ──────────────────────────────────────────────────
+        card_frame().show(ui, |ui| {
+            section_header(ui, "Add Package");
+            ui.horizontal(|ui| {
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut self.exec_new_package_input)
+                        .hint_text("module name, e.g. numpy")
+                        .desired_width(220.0),
+                );
+                let submit = ui
+                    .add_sized(
+                        [80.0, 28.0],
+                        Button::new(RichText::new("+ Add").color(BG_APP)).fill(ACCENT),
+                    )
+                    .clicked()
+                    || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+
+                if submit {
+                    let name = self.exec_new_package_input.trim().to_string();
+                    if !name.is_empty() && !self.exec_allowed_packages.contains(&name) {
+                        self.exec_allowed_packages.push(name);
+                        self.exec_allowed_packages.sort();
+                    }
+                    self.exec_new_package_input.clear();
+                }
+            });
+        });
+        ui.add_space(10.0);
+
+        // ── Current allowlist ──────────────────────────────────────────────
+        card_frame().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                section_header(ui, "Allowed Packages");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(Button::new(
+                            RichText::new("Reset to defaults").size(11.0).color(TEXT_SEC),
+                        ))
+                        .clicked()
+                    {
+                        self.exec_allowed_packages = crate::sandbox::default_allowed_packages();
+                    }
+                });
+            });
+            ui.add_space(4.0);
+
+            if self.exec_allowed_packages.is_empty() {
+                ui.label(
+                    RichText::new("No additional packages — only the safe stdlib baseline is importable.")
+                        .size(12.0)
+                        .color(C_MUTED),
+                );
+                return;
+            }
+
+            let mut remove: Option<usize> = None;
+            for (idx, pkg) in self.exec_allowed_packages.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(Button::new(RichText::new("✕").size(11.0).color(C_DANGER)))
+                        .on_hover_text("Remove")
+                        .clicked()
+                    {
+                        remove = Some(idx);
+                    }
+                    ui.label(RichText::new(pkg).size(12.0).color(TEXT_PRI).monospace());
+                });
+            }
+            if let Some(idx) = remove {
+                self.exec_allowed_packages.remove(idx);
+            }
+        });
+
+        if self.executor_running {
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("⚠ Executor is running — restart it to apply allowlist changes.")
+                    .size(11.0)
+                    .color(C_WARNING),
+            );
+        }
     }
 
     // ── Network tab ──────────────────────────────────────────────────────────

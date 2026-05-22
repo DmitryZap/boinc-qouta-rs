@@ -1,15 +1,15 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.5.14)  19 MAY 2026 19:39
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.5.14)  22 MAY 2026 14:19
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
-**coursework.tex
+**coursework
 (./coursework.tex
 LaTeX2e <2025-11-01>
 L3 programming layer <2026-01-19>
 (/usr/local/texlive/2026basic/texmf-dist/tex/latex/extsizes/extarticle.cls
 Document Class: extarticle 1996/10/08 v1.0 Non Standard LaTeX document class
-(/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/size12.clo
-File: size12.clo 2025/01/22 v1.4n Standard LaTeX file (size option)
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/size11.clo
+File: size11.clo 2025/01/22 v1.4n Standard LaTeX file (size option)
 )
 (/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/exscale.sty
 Package: exscale 2025/06/05 v2.1i Standard LaTeX package exscale
@@ -1366,12 +1366,12 @@ LaTeX Font Info:    ... okay on input line 57.
 * \topmargin=-52.36449pt
 * \headheight=12.0pt
 * \headsep=25.0pt
-* \topskip=12.0pt
+* \topskip=11.0pt
 * \footskip=30.0pt
-* \marginparwidth=35.0pt
+* \marginparwidth=50.0pt
 * \marginparsep=10.0pt
 * \columnsep=10.0pt
-* \skip\footins=10.8pt plus 4.0pt minus 2.0pt
+* \skip\footins=10.0pt plus 4.0pt minus 2.0pt
 * \hoffset=0.0pt
 * \voffset=0.0pt
 * \mag=1000
@@ -1455,104 +1455,83 @@ r/local/texlive/2026basic/texmf-dist/fonts/enc/dvips/cm-super/cm-super-t2a.enc}
 \tf@toc=\write5
 \openout5 = `coursework.toc'.
 
- [2] [3] [4] [5]
-Overfull \hbox (8.1822pt too wide) in paragraph at lines 175--185
-[]\T2A/cmr/m/n/12 Нефункциональные тре-бо-ва-ния так-же но-сят су-ще-ствен-ный 
-ха-рак-тер. Ре-а-ли-за-ция долж-
- []
-
-[6] [7] [8] [9] [10] [11]
-Overfull \hbox (0.1744pt too wide) in paragraph at lines 380--387
-[]\T2A/cmr/m/n/12 В ка-че-стве хэш-функции для по-стро-е-ния блокчейн-реестра б
-ыл вы-бран ал-го-ритм SHA-
- []
-
-[12] [13] [14]
-<graphics/C4_Container_BOINC_Quota.png, id=149, 1464.47125pt x 1843.88875pt>
+ [2] [3] [4] [5] [6] [7] [8] [9] [10]
+<graphics/C4_Container_BOINC_Quota.png, id=134, 1464.47125pt x 1843.88875pt>
 File: graphics/C4_Container_BOINC_Quota.png Graphic file (type png)
 <use graphics/C4_Container_BOINC_Quota.png>
 Package pdftex.def Info: graphics/C4_Container_BOINC_Quota.png  used on input l
-ine 446.
+ine 436.
 (pdftex.def)             Requested size: 497.92325pt x 626.9139pt.
 
 
 LaTeX Warning: `!h' float specifier changed to `!ht'.
 
-[15]
 LaTeX Font Info:    Trying to load font information for T2A+cmtt on input line 
-467.
- (/usr/local/texlive/2026basic/texmf-dist/tex/latex/cyrillic/t2acmtt.fd
+455.
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/cyrillic/t2acmtt.fd
 File: t2acmtt.fd 2001/08/11 v1.0a Computer Modern Cyrillic font definitions
 )
-[16 <./graphics/C4_Container_BOINC_Quota.png>] [17] [18] [19] [20]
-Overfull \hbox (27.59393pt too wide) in paragraph at lines 583--597
-[]\T2A/cmr/m/n/12 Основной ре-жим ра-бо-ты пред-по-ла-га-ет за-пуск поль-зо-ва-
-тель-ской за-да-чи в Docker-контейнере
+[11] [12 <./graphics/C4_Container_BOINC_Quota.png>]
+Overfull \hbox (24.25415pt too wide) in paragraph at lines 486--496
+\T2A/cmr/m/n/10.95 си-сте-мы. По-сле на-зна-че-ния за-да-чи ис-пол-ни-те-лю за-
+пус-ка-ет-ся тай-мер: ес-ли в те-че-ние \T2A/cmtt/m/n/10.95 lease_timeout_ticks
+
  []
 
-[21] [22] [23] [24] [25]
-Overfull \hbox (5.03268pt too wide) in paragraph at lines 766--766
-[]\T2A/cmr/m/n/12 S. D. Kamvar, M. T. Schlosser и H. Garcia-Molina. ``The Eigen
-Trust Algorithm for Reputation
+<sequence_task.png, id=149, 1089.06876pt x 1710.39pt>
+File: sequence_task.png Graphic file (type png)
+<use sequence_task.png>
+Package pdftex.def Info: sequence_task.png  used on input line 516.
+(pdftex.def)             Requested size: 419.03519pt x 658.09767pt.
+[13] [14 <./sequence_task.png>] [15]
+Overfull \hbox (23.0692pt too wide) in paragraph at lines 621--632
+[]\T2A/cmr/m/n/10.95 Графический ин-тер-фейс при-ло-же-ния ре-а-ли-зо-ван на би
+б-лио-те-ке egui [[][]5[][]] в немед-лен-ном (immediate-
+ []
+
+[16] [17] [18] [19] [20]
+Overfull \hbox (6.11922pt too wide) in paragraph at lines 802--802
+[]\T2A/cmr/m/n/10.95 Gridcoin Community. \T2A/cmr/m/it/10.95 Gridcoin: rewardin
+g BOINC distributed computation\T2A/cmr/m/n/10.95 . \T2A/cmr/m/sc/10.95 url\T2A
+/cmr/m/n/10.95 : [][]$\T2A/cmtt/m/n/10.95 https : / / gridcoin .
  []
 
 
-Overfull \hbox (5.63893pt too wide) in paragraph at lines 766--766
-[]\T2A/cmr/m/n/12 L. Lamport, R. Shostak и M. Pease. ``The Byzantine Generals P
-roblem''. В: \T2A/cmr/m/it/12 ACM Transactions
+Overfull \hbox (4.4521pt too wide) in paragraph at lines 802--802
+\T2A/cmr/m/n/10.95 Management in P2P Networks''. В: \T2A/cmr/m/it/10.95 Proceed
+ings of the 12th International World Wide Web Conference\T2A/cmr/m/n/10.95 .
  []
 
-
-Overfull \hbox (4.3084pt too wide) in paragraph at lines 766--766
-[]\T2A/cmr/m/n/12 D. Merkel. ``Docker: lightweight Linux containers for consist
-ent development and deployment''.
- []
-
-
-Overfull \hbox (4.23557pt too wide) in paragraph at lines 766--766
-[]\T2A/cmr/m/n/12 S. Nakamoto. \T2A/cmr/m/it/12 Bitcoin: A Peer-to-Peer Electro
-nic Cash System\T2A/cmr/m/n/12 . 2008. \T2A/cmr/m/sc/12 url\T2A/cmr/m/n/12 : []
-[]$\T2A/cmtt/m/n/12 https : / / bitcoin .
- []
-
-[26] [27] (./coursework.aux)
+[21] [22] (./coursework.aux)
  ***********
 LaTeX2e <2025-11-01>
 L3 programming layer <2026-01-19>
  ***********
-
-
-LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.
-
 Package logreq Info: Writing requests to 'coursework.run.xml'.
 \openout1 = `coursework.run.xml'.
 
  ) 
 Here is how much of TeX's memory you used:
- 34602 strings out of 468797
- 645583 string characters out of 5452090
- 1491559 words of memory out of 5000000
- 62723 multiletter control sequences out of 15000+600000
- 638339 words of font info for 66 fonts, out of 8000000 for 9000
+ 34605 strings out of 468797
+ 645773 string characters out of 5452090
+ 1494845 words of memory out of 5000000
+ 62732 multiletter control sequences out of 15000+600000
+ 638368 words of font info for 66 fonts, out of 8000000 for 9000
  503 hyphenation exceptions out of 8191
- 84i,10n,104p,759b,1820s stack positions out of 10000i,1000n,20000p,200000b,200000s
-
-pdfTeX warning (dest): name{section*.5} has been referenced but does not exist,
- replaced by a fixed one
-
-</usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmr12.p
-fb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmr8
-.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/cm-super/sfbx1
-200.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/cm-super/sf
-bx1728.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/cm-super
-/sfcc1200.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/cm-su
-per/sfrm1200.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/cm
--super/sfti1200.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public
-/cm-super/sftt1200.pfb>
-Output written on coursework.pdf (27 pages, 339911 bytes).
+ 84i,10n,104p,755b,1820s stack positions out of 10000i,1000n,20000p,200000b,200000s
+</usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10
+.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cm
+r8.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/cm-super/sfb
+x1095.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/cm-super/
+sfbx1440.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/cm-sup
+er/sfcc1095.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/cm-
+super/sfrm1095.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/
+cm-super/sfti1095.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/publ
+ic/cm-super/sftt1095.pfb>
+Output written on coursework.pdf (22 pages, 414303 bytes).
 PDF statistics:
- 287 PDF objects out of 1000 (max. 8388607)
- 237 compressed objects within 3 object streams
- 67 named destinations out of 1000 (max. 500000)
- 18 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 268 PDF objects out of 1000 (max. 8388607)
+ 221 compressed objects within 3 object streams
+ 63 named destinations out of 1000 (max. 500000)
+ 23 words of extra memory for PDF output out of 10000 (max. 10000000)
 

@@ -1,8 +1,14 @@
+# Python interpreter for PyO3. The isolated interpreter needs smolagents
+# (Python >=3.10); the system python3.9 cannot install it. We use the project
+# venv (.venv, brew python@3.12) and force it so builds/runs are deterministic.
 [env]
-PYO3_PYTHON = "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9"
+PYO3_PYTHON = { value = "/Users/dmitryzap/Projects/learning/boinc-qouta-rs/.venv/bin/python3.12", force = true }
+# Make the venv's smolagents importable by the embedded interpreter at runtime
+# (covers `cargo run`; direct binary runs are covered by PYO3_PYTHON's venv prefix).
+PYTHONPATH = { value = "/Users/dmitryzap/Projects/learning/boinc-qouta-rs/.venv/lib/python3.12/site-packages", force = true }
 
 [build]
 rustflags = [
-  "-L", "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib",
-  "-C", "link-arg=-Wl,-rpath,/Library/Developer/CommandLineTools/Library/Frameworks",
+  "-L", "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/lib",
+  "-C", "link-arg=-Wl,-rpath,/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/lib",
 ]

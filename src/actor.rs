@@ -180,14 +180,14 @@ async fn run_coordinator(
                             |task_id| Some(AppEvent::Log(format!("Task #{task_id} submitted"))),
                         ).await;
                     }
-                    AppCommand::StartExecutor { reliability, compute_ticks }
+                    AppCommand::StartExecutor { reliability, compute_ticks, allowed_packages }
                         if executor_stop.is_none() =>
                     {
                         let net_clone = Arc::clone(&network);
                         let bcast = broadcast_tx.clone();
                         let evt = evt_tx.clone();
                         let handle = tokio::spawn(coordinator_executor_loop(
-                            my_id, reliability, compute_ticks, net_clone, bcast, evt,
+                            my_id, reliability, compute_ticks, allowed_packages, net_clone, bcast, evt,
                         ));
                         executor_stop = Some(handle);
                         let _ = evt_tx.send(AppEvent::ExecutorStarted).await;
@@ -466,20 +466,63 @@ async fn handle_peer_request(
     }
 }
 
+/// Auto-install missing allowlist packages into the venv before the executor
+/// runs, logging each install/failure. Stdlib and already-present modules are
+/// silently skipped.
+async fn ensure_packages(packages: &[String], evt_tx: &mpsc::Sender<AppEvent>) {
+    // First-run bootstrap: locate system Python, create the venv, install
+    // smolagents. Cached, so this is cheap after the first executor start.
+    let ready = tokio::task::spawn_blocking(crate::pyenv::ensure_ready)
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+    if let Err(e) = ready {
+        let _ = evt_tx
+            .send(AppEvent::Log(format!("Python environment setup failed: {e}")))
+            .await;
+        return;
+    }
+
+    if packages.is_empty() {
+        return;
+    }
+    let pkgs = packages.to_vec();
+    let results = tokio::task::spawn_blocking(move || {
+        crate::sandbox::ensure_packages_installed(&pkgs)
+    })
+    .await
+    .unwrap_or_default();
+
+    for (name, outcome) in results {
+        let msg = match outcome {
+            crate::sandbox::InstallOutcome::AlreadyPresent => continue,
+            crate::sandbox::InstallOutcome::Installed => {
+                format!("Installed package '{name}'")
+            }
+            crate::sandbox::InstallOutcome::Failed(e) => {
+                format!("Failed to install '{name}': {e}")
+            }
+        };
+        let _ = evt_tx.send(AppEvent::Log(msg)).await;
+    }
+}
+
 async fn coordinator_executor_loop(
     worker_id: ParticipantId,
     reliability: u8,
     compute_ticks: u64,
+    allowed_packages: Vec<String>,
     network: Arc<Mutex<Network>>,
     broadcast_tx: broadcast::Sender<String>,
     evt_tx: mpsc::Sender<AppEvent>,
 ) {
+    ensure_packages(&allowed_packages, &evt_tx).await;
     let executor = Executor::new(
         worker_id,
         "local-executor",
         reliability,
         compute_ticks.max(1),
         1,
+        allowed_packages,
     );
     loop {
         let result = {
@@ -638,7 +681,15 @@ async fn run_worker(
         let w = Arc::clone(&writer);
         let r = Arc::clone(&reader);
         let e = evt_tx.clone();
-        let handle = tokio::spawn(worker_executor_loop(my_id, 95, 2, w, r, e));
+        let handle = tokio::spawn(worker_executor_loop(
+            my_id,
+            95,
+            2,
+            crate::sandbox::default_allowed_packages(),
+            w,
+            r,
+            e,
+        ));
         let _ = evt_tx.send(AppEvent::ExecutorStarted).await;
         let _ = evt_tx
             .send(AppEvent::Log("Worker executor started".to_string()))
@@ -676,14 +727,14 @@ async fn run_worker(
                         ).await;
                         request_state_update(&writer, &reader, evt_tx).await;
                     }
-                    AppCommand::StartExecutor { reliability, compute_ticks }
+                    AppCommand::StartExecutor { reliability, compute_ticks, allowed_packages }
                         if executor_handle.is_none() =>
                     {
                         let w = Arc::clone(&writer);
                         let r = Arc::clone(&reader);
                         let e = evt_tx.clone();
                         let handle = tokio::spawn(worker_executor_loop(
-                            my_id, reliability, compute_ticks, w, r, e,
+                            my_id, reliability, compute_ticks, allowed_packages, w, r, e,
                         ));
                         executor_handle = Some(handle);
                         let _ = evt_tx.send(AppEvent::ExecutorStarted).await;
@@ -731,11 +782,13 @@ async fn worker_executor_loop(
     worker_id: ParticipantId,
     reliability: u8,
     compute_ticks: u64,
+    allowed_packages: Vec<String>,
     writer: SharedWriter,
     reader: SharedReader,
     evt_tx: mpsc::Sender<AppEvent>,
 ) {
-    let executor = Executor::new(worker_id, "worker-executor", reliability, 1, 1);
+    ensure_packages(&allowed_packages, &evt_tx).await;
+    let executor = Executor::new(worker_id, "worker-executor", reliability, 1, 1, allowed_packages);
     loop {
         // Request a task
         let _ = send_request(&writer, &PeerRequest::RequestTask { worker_id }).await;

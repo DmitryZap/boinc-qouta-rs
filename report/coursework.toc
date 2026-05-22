@@ -2,15 +2,16 @@
 \contentsline {section}{Аннотация}{3}{section*.2}%
 \contentsline {section}{Ключевые слова}{3}{section*.3}%
 \contentsline {section}{\numberline {1}Введение}{4}{section.1}%
-\contentsline {section}{\numberline {2}Постановка задачи}{6}{section.2}%
-\contentsline {section}{\numberline {3}Обзор литературы}{8}{section.3}%
-\contentsline {section}{\numberline {4}Анализ существующих решений}{10}{section.4}%
-\contentsline {section}{\numberline {5}Выбор инструментов разработки}{12}{section.5}%
-\contentsline {section}{\numberline {6}Архитектура системы}{14}{section.6}%
-\contentsline {section}{\numberline {7}Протокол распределённых вычислений}{17}{section.7}%
-\contentsline {section}{\numberline {8}Блокчейн-реестр}{19}{section.8}%
-\contentsline {section}{\numberline {9}Исполнитель задач}{21}{section.9}%
-\contentsline {section}{\numberline {10}Графический интерфейс}{23}{section.10}%
-\contentsline {section}{\numberline {11}Тестирование}{24}{section.11}%
-\contentsline {section}{\numberline {12}Заключение}{25}{section.12}%
-\contentsline {section}{Список литературы}{26}{section*.6}%
+\contentsline {section}{\numberline {2}Постановка задачи}{5}{section.2}%
+\contentsline {section}{\numberline {3}Обзор литературы}{6}{section.3}%
+\contentsline {section}{\numberline {4}Анализ существующих решений}{7}{section.4}%
+\contentsline {section}{\numberline {5}Выбор инструментов разработки}{9}{section.5}%
+\contentsline {section}{\numberline {6}Архитектура системы}{10}{section.6}%
+\contentsline {section}{\numberline {7}Протокол распределённых вычислений}{11}{section.7}%
+\contentsline {section}{\numberline {8}Блокчейн-реестр}{13}{section.8}%
+\contentsline {section}{\numberline {9}Исполнитель задач}{15}{section.9}%
+\contentsline {section}{\numberline {10}Графический интерфейс}{16}{section.10}%
+\contentsline {section}{\numberline {11}Тестирование}{17}{section.11}%
+\contentsline {section}{\numberline {12}Заключение}{18}{section.12}%
+\contentsline {section}{\numberline {13}Использование инструментов искусственного интеллекта}{19}{section.13}%
+\contentsline {section}{Список литературы}{21}{section*.7}%

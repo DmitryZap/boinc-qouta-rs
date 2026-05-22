@@ -107,6 +107,7 @@ pub enum AppCommand {
     StartExecutor {
         reliability: u8,
         compute_ticks: u64,
+        allowed_packages: Vec<String>,
     },
     StopExecutor,
     Disconnect,

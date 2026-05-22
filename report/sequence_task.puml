@@ -1,0 +1,68 @@
+@startuml sequence_task
+title Жизненный цикл задачи: от публикации до вознаграждения
+
+skinparam backgroundColor white
+skinparam sequenceMessageAlign center
+
+actor "Владелец\nпроекта" as Owner
+participant "Координатор" as Coord
+participant "Реестр\n(блокчейн)" as Chain
+participant "Исполнитель 1" as W1
+participant "Исполнитель 2" as W2
+participant "Песочница\n(Docker)" as Sbox
+
+== Аутентификация исполнителя ==
+W1 -> Coord : Hello(name, public_key, balance)
+Coord -> W1 : Challenge(participant_id, nonce)
+W1 -> Coord : Auth(public_key, sign(nonce))
+alt подпись верна
+  Coord -> W1 : Welcome(participant_id)
+else подпись неверна
+  Coord -> W1 : Denied(reason)
+end
+
+== Публикация задачи ==
+Owner -> Coord : SubmitTask(project_id, reward, payload)
+Coord -> Chain : блокировка quota на сумму reward
+Coord -> Owner : TaskSubmitted(task_id)
+
+== Раздача и исполнение ==
+W1 -> Coord : RequestTask(worker_id)
+Coord -> Coord : reclaim_expired_leases()
+Coord -> W1 : TaskAssigned(task_id, payload, ...)
+note over Coord: аренда задачи, expires_at = tick + lease_timeout
+
+activate W1
+W1 -> Sbox : запуск payload в изолированном контейнере
+loop пока выполняется
+  W1 -> Coord : Heartbeat(worker_id, task_id)
+  Coord -> Coord : продление аренды
+end
+Sbox -> W1 : result, actual_cost
+deactivate W1
+
+W1 -> Coord : SubmitResult(task_id, digest_A, cost, enc_result)
+Coord -> W1 : ResultAck(consensus=false)
+note right of Coord: один результат —\nвес < кворума
+
+W2 -> Coord : RequestTask(worker_id)
+Coord -> W2 : TaskAssigned(task_id, payload, ...)
+W2 -> Sbox : запуск payload
+Sbox -> W2 : result, actual_cost
+W2 -> Coord : SubmitResult(task_id, digest_A, cost, enc_result)
+
+== Консенсус и расчёт ==
+Coord -> Coord : сумма весов (репутация)\nпо совпавшим digest >= кворум?
+alt консенсус достигнут
+  Coord -> Chain : Burn(reward) из quota проекта
+  Coord -> Chain : Transfer reward исполнителям
+  Coord -> Coord : +reputation_reward участникам
+  Coord -> W2 : ResultAck(consensus=true)
+else расхождение / лимит попыток
+  Coord -> Coord : -reputation_penalty,\nразблокировка quota, задача отклонена
+end
+
+== Истечение аренды (сбой исполнителя) ==
+note over Coord: если Heartbeat прекратился\nи tick > expires_at:
+Coord -> Coord : reclaim_expired_leases()\n-lease_slash, задача снова доступна
+@enduml
