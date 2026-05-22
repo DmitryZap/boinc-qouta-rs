@@ -193,6 +193,28 @@ impl ConsensusEngine {
         &self.mempool
     }
 
+    /// Snapshot the committed chain for persistence.
+    pub fn chain_blocks(&self) -> Vec<OpBlock> {
+        self.chain.clone()
+    }
+
+    /// Replay a persisted chain (trusted: our own saved data — links and applies
+    /// ops without re-checking certificates). Genesis is already present, so
+    /// only blocks at the expected next index are applied, in order.
+    pub fn restore_chain(&mut self, blocks: Vec<OpBlock>) {
+        for block in blocks {
+            if block.index != self.next_index() {
+                continue;
+            }
+            self.add_validator(block.proposer);
+            let voters: Vec<NodeKey> = block.votes.iter().map(|v| v.voter).collect();
+            for v in voters {
+                self.add_validator(v);
+            }
+            self.append_and_apply(block);
+        }
+    }
+
     pub fn block_count(&self) -> usize {
         self.chain.len()
     }

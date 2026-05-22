@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 
 use crate::blockchain::{NodeKey, Transaction};
-use crate::consensus::{ConsensusEngine, ConsensusMsg};
+use crate::consensus::{ConsensusEngine, ConsensusMsg, OpBlock};
 use crate::executor::Executor;
 use crate::identity::Identity;
 use crate::model::ParticipantId;
@@ -673,6 +673,31 @@ pub async fn p2p_node_with_identity(
         .await;
 }
 
+/// On-disk path for a node's persisted consensus chain, keyed by its pubkey so
+/// each local node keeps its own copy.
+fn chain_path(key: &NodeKey) -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("boinc-quota")
+        .join(format!("chain-{}.json", hex::encode(&key[..8])))
+}
+
+fn load_chain(path: &PathBuf) -> Vec<OpBlock> {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn save_chain(path: &PathBuf, blocks: &[OpBlock]) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(bytes) = serde_json::to_vec(blocks) {
+        let _ = std::fs::write(path, bytes);
+    }
+}
+
 /// Pick the identity for a node. An explicit `BOINC_IDENTITY` env var always
 /// wins (used by the CLI and for stable single-node setups). Otherwise the
 /// identity is derived from the connection params (role + address + name) so
@@ -769,6 +794,21 @@ async fn run_role_node(
     let peers: PeerMap = Arc::new(Mutex::new(HashMap::new()));
     let seen: SeenSet = Arc::new(Mutex::new(HashSet::new()));
 
+    // Restore our persisted chain so reconnecting doesn't lose history.
+    let chain_file = chain_path(&my_key);
+    let saved = load_chain(&chain_file);
+    if !saved.is_empty() {
+        let restored = {
+            let mut e = engine.lock().await;
+            e.restore_chain(saved);
+            e.block_count()
+        };
+        let _ = evt_tx
+            .send(AppEvent::Log(format!("Restored chain: {restored} blocks")))
+            .await;
+    }
+    let mut last_saved = engine.lock().await.block_count();
+
     let _ = evt_tx.send(AppEvent::Connected).await;
     let _ = evt_tx
         .send(AppEvent::Registered {
@@ -843,11 +883,17 @@ async fn run_role_node(
                     if started.elapsed() >= PROPOSE_GRACE { e.try_propose() } else { vec![] }
                 };
                 flood_consensus(&peers, &seen, None, out).await;
-                // Push the replicated state to the local UI.
-                let snap = {
+                // Push the replicated state to the local UI and persist the chain
+                // if it grew, so a reconnect restores it.
+                let (snap, to_save) = {
                     let e = engine.lock().await;
-                    build_snapshot(e.state())
+                    let to_save = (e.block_count() != last_saved).then(|| e.chain_blocks());
+                    (build_snapshot(e.state()), to_save)
                 };
+                if let Some(blocks) = to_save {
+                    last_saved = blocks.len();
+                    save_chain(&chain_file, &blocks);
+                }
                 let _ = evt_tx.send(AppEvent::StateUpdate(snap)).await;
             }
             _ = tick_timer.tick(), if role == NodeRole::Coordinator => {
@@ -932,6 +978,8 @@ async fn run_role_node(
     if let Some(h) = executor_handle {
         h.abort();
     }
+    // Final persist on disconnect.
+    save_chain(&chain_file, &engine.lock().await.chain_blocks());
     let _ = evt_tx
         .send(AppEvent::Disconnected {
             reason: "stopped".to_string(),
