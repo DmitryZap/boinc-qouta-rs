@@ -1,10 +1,10 @@
-//! `LedgerOp` — the high-level operations that make up the replicated consensus
+//! `LedgerOp`: the high-level operations that make up the replicated consensus
 //! log. Every node applies an identical, ordered sequence of these to its local
 //! [`Network`](crate::network::Network) replica via
 //! [`Network::apply_op`](crate::network::Network::apply_op), so all nodes
 //! converge on byte-identical state (balances, projects, tasks, reputation).
 //!
-//! Operations are *intents*, not effects. Id allocation for projects and tasks
+//! Operations are intents, not effects. Id allocation for projects and tasks
 //! happens deterministically at apply time (sequential counters advance in lock
 //! step because the op order is identical everywhere), so those ops carry no id.
 //! Participant ids are the pubkey-derived account address, known to a node

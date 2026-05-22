@@ -9,7 +9,7 @@ participant "Координатор" as Coord
 participant "Реестр\n(блокчейн)" as Chain
 participant "Исполнитель 1" as W1
 participant "Исполнитель 2" as W2
-participant "Песочница\n(Docker)" as Sbox
+participant "Песочница\n(smolagents / PyO3)" as Sbox
 
 == Аутентификация исполнителя ==
 W1 -> Coord : Hello(name, public_key, balance)
@@ -33,7 +33,7 @@ Coord -> W1 : TaskAssigned(task_id, payload, ...)
 note over Coord: аренда задачи, expires_at = tick + lease_timeout
 
 activate W1
-W1 -> Sbox : запуск payload в изолированном контейнере
+W1 -> Sbox : запуск payload в изолированном интерпретаторе
 loop пока выполняется
   W1 -> Coord : Heartbeat(worker_id, task_id)
   Coord -> Coord : продление аренды

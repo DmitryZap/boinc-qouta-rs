@@ -1,0 +1,47 @@
+@startuml hash_chain
+title Структура хэш-цепочки блокчейн-реестра
+
+skinparam backgroundColor white
+skinparam rectangle {
+  BackgroundColor #F5F5F5
+  BorderColor #333333
+  FontSize 12
+}
+skinparam ArrowColor #333333
+
+rectangle "Блок 0 (genesis)" as B0 {
+  card "height = 0" as B0h
+  card "tx: Mint" as B0t
+  card "prev_hash = 0" as B0p
+}
+
+rectangle "Блок 1" as B1 {
+  card "height = 1" as B1h
+  card "tx: Transfer" as B1t
+  card "prev_hash =\nSHA256(блок 0)" as B1p
+}
+
+rectangle "Блок 2" as B2 {
+  card "height = 2" as B2h
+  card "tx: Burn" as B2t
+  card "prev_hash =\nSHA256(блок 1)" as B2p
+}
+
+rectangle "Блок 3" as B3 {
+  card "height = 3" as B3h
+  card "tx: Transfer" as B3t
+  card "prev_hash =\nSHA256(блок 2)" as B3p
+}
+
+B0 -right-> B1 : hash
+B1 -right-> B2 : hash
+B2 -right-> B3 : hash
+
+note bottom of B1
+  SHA256(height || tx || prev_hash)
+  Подмена любого поля меняет хэш блока
+  --> рвётся связка со всеми последующими
+  --> verify() сообщает индекс повреждённого блока
+end note
+
+@enduml

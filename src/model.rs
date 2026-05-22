@@ -37,7 +37,7 @@ pub struct Project {
     pub name: String,
     pub quota_available: u64,
     pub quota_locked: u64,
-    /// Project owner's X25519 public key — used by workers to encrypt
+    /// Project owner's X25519 public key, used by workers to encrypt
     /// task result stdout so only the owner can decrypt it.
     #[serde(default)]
     pub owner_encryption_pubkey: Option<[u8; 32]>,
@@ -106,7 +106,7 @@ pub struct Task {
     pub max_reports: usize,
     pub reports: Vec<TaskReport>,
     pub status: TaskStatus,
-    /// Filled in when consensus is reached — copied from the report that
+    /// Filled in when consensus is reached, copied from the report that
     /// matched the accepted digest. The project owner can decrypt this.
     #[serde(default)]
     pub encrypted_result: Option<EncryptedBlob>,

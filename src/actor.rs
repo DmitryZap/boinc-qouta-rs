@@ -54,6 +54,7 @@ impl NetworkActor {
                         peer_coordinators,
                         name,
                         balance,
+                        Vec::new(),
                     )
                     .await;
                 }
@@ -61,6 +62,7 @@ impl NetworkActor {
                     coord_addr,
                     name,
                     balance,
+                    allowed_packages,
                 } => {
                     // Worker: dials its coordinator; no listener (hub topology).
                     let identity = resolve_identity("worker", &coord_addr, &name);
@@ -73,6 +75,7 @@ impl NetworkActor {
                         vec![coord_addr],
                         name,
                         balance,
+                        allowed_packages,
                     )
                     .await;
                 }
@@ -249,7 +252,7 @@ fn transaction_view(tx: &Transaction) -> TransactionView {
     }
 }
 
-// ── P2P consensus mesh ──────────────────────────────────────────────────────────
+// P2P consensus mesh
 
 /// Live writers to connected peers, keyed by their advertised listen address.
 type PeerMap = Arc<Mutex<HashMap<String, SharedWriter>>>;
@@ -274,7 +277,7 @@ async fn send_p2p(writer: &SharedWriter, msg: &P2pMessage) {
     }
 }
 
-/// Send one envelope to every peer except `exclude` (the sender we relay from).
+/// Send one envelope to every peer except `exclude`, the sender we relay from.
 async fn flood_envelope(peers: &PeerMap, exclude: Option<&str>, env: &P2pMessage) {
     let line = match serde_json::to_string(env) {
         Ok(l) => l,
@@ -323,12 +326,12 @@ async fn build_p2p_snapshot(
     let peer_count = peers.lock().await.len();
     let e = engine.lock().await;
     // Render the replica's internal economic ledger (token transactions) for the
-    // UI; the consensus op-log drives it but the economy view stays the same.
+    // UI. The consensus op-log drives it, but the economy view stays the same.
     let econ = e.state().blockchain();
     P2pSnapshot {
         node_key_short: node_key_short.to_string(),
         peers: peer_count,
-        validators: e.validator_count(),
+        validators: e.active_count(),
         mempool: e.mempool().len(),
         block_count: e.block_count(),
         blockchain_valid: econ.verify_integrity(),
@@ -369,8 +372,8 @@ fn spawn_dial(
 /// Drive one peer connection (inbound-accepted or outbound-dialed, symmetric).
 /// Peers are keyed by node pubkey (unique), so multiple workers that don't run
 /// a listener never collide. There is no peer auto-discovery: the topology is
-/// exactly the configured links (workers→coordinator, coordinator↔coordinator),
-/// and the coordinator relays gossip between its links — the hub model.
+/// exactly the configured links (workers to coordinator, coordinator to
+/// coordinator), and the coordinator relays gossip between its links (hub model).
 #[allow(clippy::too_many_arguments)]
 async fn p2p_connection(
     stream: TcpStream,
@@ -398,6 +401,7 @@ async fn p2p_connection(
     .await;
 
     let mut peer_key: Option<String> = None;
+    let mut peer_node_key: Option<NodeKey> = None;
 
     while let Some(line) = reader.next().await {
         let line = match line {
@@ -413,6 +417,7 @@ async fn p2p_connection(
             P2pMessage::Hello { node_key, .. } => {
                 let key = hex::encode(node_key);
                 peer_key = Some(key.clone());
+                peer_node_key = Some(node_key);
                 peers.lock().await.insert(key, Arc::clone(&writer));
 
                 // Learn the new peer, and tell it every validator we already know
@@ -430,8 +435,8 @@ async fn p2p_connection(
                 flood_envelope(&peers, peer_key.as_deref(), &P2pMessage::Validator(node_key)).await;
 
                 // Bring this peer up to date, and hand over our pending ops so
-                // every node's mempool converges (a height's fixed proposer must
-                // hold the ops to make progress).
+                // every node's mempool converges. A height's fixed proposer must
+                // hold the ops to make progress.
                 let (from, pending) = {
                     let e = engine.lock().await;
                     (e.next_index(), e.mempool().to_vec())
@@ -495,6 +500,11 @@ async fn p2p_connection(
 
     if let Some(key) = peer_key {
         peers.lock().await.remove(&key);
+    }
+    // Drop this peer from the active validator set so it stops counting toward
+    // the quorum and the proposer rotation (its historical votes still verify).
+    if let Some(node_key) = peer_node_key {
+        engine.lock().await.mark_inactive(node_key);
     }
     let _ = evt_tx
         .send(AppEvent::Log("Peer connection closed".to_string()))
@@ -701,9 +711,9 @@ fn save_chain(path: &PathBuf, blocks: &[OpBlock]) {
 /// Pick the identity for a node. An explicit `BOINC_IDENTITY` env var always
 /// wins (used by the CLI and for stable single-node setups). Otherwise the
 /// identity is derived from the connection params (role + address + name) so
-/// several nodes launched locally each get a distinct, stable key automatically
-/// — no need to juggle `BOINC_IDENTITY` per instance. Different connection →
-/// different identity.
+/// several nodes launched locally each get a distinct, stable key automatically,
+/// with no need to juggle `BOINC_IDENTITY` per instance. A different connection
+/// yields a different identity.
 fn resolve_identity(role: &str, addr: &str, name: &str) -> Identity {
     if std::env::var("BOINC_IDENTITY").is_ok() {
         return Identity::load_or_generate(&Identity::default_path());
@@ -718,7 +728,7 @@ fn resolve_identity(role: &str, addr: &str, name: &str) -> Identity {
     Identity::load_or_generate(&path)
 }
 
-// ── Coordinator / Worker consensus nodes ────────────────────────────────────────
+// Coordinator / Worker consensus nodes
 
 /// Role of a node in the shared-ledger consensus mesh. Both roles are equal
 /// validators; the role only governs task behaviour and transport shape.
@@ -755,6 +765,7 @@ async fn run_role_node(
     bootstrap: Vec<String>,
     name: String,
     balance: u64,
+    worker_packages: Vec<String>,
 ) {
     let my_key = identity.public_key_bytes();
     let my_short = identity.public_key_short();
@@ -795,17 +806,26 @@ async fn run_role_node(
     let seen: SeenSet = Arc::new(Mutex::new(HashSet::new()));
 
     // Restore our persisted chain so reconnecting doesn't lose history.
+    //
+    // Only the coordinator does this. A worker is a replica, not an authority:
+    // restoring its own stale chain from a previous session makes its head
+    // diverge from the coordinator's, so it rejects every coordinator proposal
+    // (prev_hash mismatch in on_propose) and, under quorum, nothing ever commits,
+    // stalling tasks. Workers instead start from genesis and resync the live
+    // chain from the mesh.
     let chain_file = chain_path(&my_key);
-    let saved = load_chain(&chain_file);
-    if !saved.is_empty() {
-        let restored = {
-            let mut e = engine.lock().await;
-            e.restore_chain(saved);
-            e.block_count()
-        };
-        let _ = evt_tx
-            .send(AppEvent::Log(format!("Restored chain: {restored} blocks")))
-            .await;
+    if role == NodeRole::Coordinator {
+        let saved = load_chain(&chain_file);
+        if !saved.is_empty() {
+            let restored = {
+                let mut e = engine.lock().await;
+                e.restore_chain(saved);
+                e.block_count()
+            };
+            let _ = evt_tx
+                .send(AppEvent::Log(format!("Restored chain: {restored} blocks")))
+                .await;
+        }
     }
     let mut last_saved = engine.lock().await.block_count();
 
@@ -852,11 +872,14 @@ async fn run_role_node(
     // Workers run the executor automatically after connecting. Coordinators can
     // still start one manually (StartExecutor) for local validation.
     if role == NodeRole::Worker {
+        // Stdlib defaults plus any extra packages the caller requested (e.g. torch).
+        let mut packages = crate::sandbox::default_allowed_packages();
+        packages.extend(worker_packages.iter().cloned());
         let h = tokio::spawn(ops_executor_loop(
             my_addr,
             95,
             2,
-            crate::sandbox::default_allowed_packages(),
+            packages,
             Arc::clone(&engine),
             Arc::clone(&peers),
             Arc::clone(&seen),
@@ -887,7 +910,11 @@ async fn run_role_node(
                 // if it grew, so a reconnect restores it.
                 let (snap, to_save) = {
                     let e = engine.lock().await;
-                    let to_save = (e.block_count() != last_saved).then(|| e.chain_blocks());
+                    // Only the coordinator persists. A worker's replica is never
+                    // restored (see startup), so saving it would be dead weight.
+                    let to_save = (role == NodeRole::Coordinator
+                        && e.block_count() != last_saved)
+                        .then(|| e.chain_blocks());
                     (build_snapshot(e.state()), to_save)
                 };
                 if let Some(blocks) = to_save {
@@ -928,9 +955,30 @@ async fn run_role_node(
                         }).await;
                     }
                     AppCommand::DonateToProject { project_id, amount } => {
-                        submit_and_flood(&engine, &peers, &seen, LedgerOp::DonateToProject {
-                            supporter_id: my_addr, project_id, amount,
-                        }).await;
+                        // Donate ops fail silently in the replica (insufficient
+                        // balance / unknown project), so pre-check here and report
+                        // to the log instead of leaving the user with no feedback.
+                        let (balance, project_exists) = {
+                            let e = engine.lock().await;
+                            let st = e.state();
+                            (st.balance_of(my_addr), st.project(project_id).is_some())
+                        };
+                        if !project_exists {
+                            let _ = evt_tx.send(AppEvent::Log(
+                                format!("Donate failed: project #{project_id} not found"),
+                            )).await;
+                        } else if balance < amount {
+                            let _ = evt_tx.send(AppEvent::Log(
+                                format!("Donate failed: balance {balance} < {amount}"),
+                            )).await;
+                        } else {
+                            submit_and_flood(&engine, &peers, &seen, LedgerOp::DonateToProject {
+                                supporter_id: my_addr, project_id, amount,
+                            }).await;
+                            let _ = evt_tx.send(AppEvent::Log(
+                                format!("Donated {amount} to project #{project_id}"),
+                            )).await;
+                        }
                     }
                     AppCommand::SubmitTask { project_id, reward, payload } => {
                         submit_and_flood(&engine, &peers, &seen, LedgerOp::SubmitTask {
@@ -983,8 +1031,10 @@ async fn run_role_node(
     if let Some(h) = executor_handle {
         h.abort();
     }
-    // Final persist on disconnect.
-    save_chain(&chain_file, &engine.lock().await.chain_blocks());
+    // Final persist on disconnect (coordinator only; workers never restore).
+    if role == NodeRole::Coordinator {
+        save_chain(&chain_file, &engine.lock().await.chain_blocks());
+    }
     let _ = evt_tx
         .send(AppEvent::Disconnected {
             reason: "stopped".to_string(),
@@ -1076,7 +1126,7 @@ async fn ops_executor_loop(
                     continue;
                 }
                 // Claim one task, then wait for the assignment to commit before
-                // requesting again — at most one task in flight per worker, so
+                // requesting again. At most one task in flight per worker, so
                 // tasks (and their rewards/reputation) spread across workers.
                 nonce += 1;
                 submit_and_flood(
@@ -1238,6 +1288,7 @@ mod p2p_tests {
                 bootstrap,
                 "node".to_string(),
                 balance,
+                Vec::new(),
             )
             .await;
         });
@@ -1252,6 +1303,56 @@ mod p2p_tests {
             }
         }
         last
+    }
+
+    /// Coordinator + one worker: a submitted task must actually get executed —
+    /// requested, computed, result submitted, finalized to "Done".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn worker_executes_submitted_task_to_completion() {
+        let (cc, mut ec) = spawn_role(NodeRole::Coordinator, Some("127.0.0.1:17921"), vec![], 100);
+        let (_w1, mut e1) =
+            spawn_role(NodeRole::Worker, None, vec!["127.0.0.1:17921".to_string()], 0);
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let _ = cc
+            .send(AppCommand::CreateProject { name: "P".to_string(), owner_encryption_pubkey: None })
+            .await;
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        let _ = cc.send(AppCommand::FundProject { project_id: 1, amount: 50 }).await;
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        let _ = cc
+            .send(AppCommand::SubmitTask {
+                project_id: 1,
+                reward: 10,
+                payload: "print(2+2)".to_string(),
+            })
+            .await;
+
+        let mut sc = NetworkSnapshot::default();
+        let mut s1 = NetworkSnapshot::default();
+        let mut done = false;
+        for _ in 0..60 {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            if let Some(s) = latest_state(&mut ec) {
+                sc = s;
+            }
+            if let Some(s) = latest_state(&mut e1) {
+                s1 = s;
+            }
+            let task_done = |s: &NetworkSnapshot| {
+                s.tasks.len() == 1 && s.tasks[0].status_label == "Done"
+            };
+            if task_done(&sc) && task_done(&s1) {
+                done = true;
+                break;
+            }
+        }
+        assert!(
+            done,
+            "task not executed: coord_task={:?} worker_task={:?}",
+            sc.tasks.first().map(|t| &t.status_label),
+            s1.tasks.first().map(|t| &t.status_label),
+        );
     }
 
     /// A coordinator and two workers, all consensus validators over one shared

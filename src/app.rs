@@ -26,6 +26,9 @@ enum Tab {
     Projects,
     Tasks,
     Executor,
+    // Removed from the worker tab bar until the package-allowlist feature works;
+    // the tab impl is kept for when it's re-enabled.
+    #[allow(dead_code)]
     Packages,
     Network,
 }
@@ -75,6 +78,8 @@ pub struct BoincApp {
     fund_amount: String,
     donate_project_id: String,
     donate_amount: String,
+    /// Per-project donate amount input for the worker Projects tab (keyed by id).
+    worker_donate_amounts: std::collections::HashMap<u64, String>,
 
     // Tasks tab
     task_project_id: String,
@@ -155,6 +160,7 @@ impl BoincApp {
             fund_amount: String::new(),
             donate_project_id: String::new(),
             donate_amount: String::new(),
+            worker_donate_amounts: std::collections::HashMap::new(),
             task_project_id: String::new(),
             task_project_selected: None,
             task_reward: "10".to_string(),
@@ -521,7 +527,9 @@ impl eframe::App for BoincApp {
         // ── Redirect to Connect if active_tab isn't allowed in current mode ───
         let allowed: &[Tab] = match self.node_mode {
             NodeMode::Coordinator => &[Tab::Connect, Tab::Projects, Tab::Tasks, Tab::Network],
-            NodeMode::Worker => &[Tab::Connect, Tab::Tasks, Tab::Executor, Tab::Network],
+            NodeMode::Worker => {
+                &[Tab::Connect, Tab::Projects, Tab::Tasks, Tab::Executor, Tab::Network]
+            }
             NodeMode::Peer => &[Tab::Connect, Tab::Network],
         };
         if !allowed.contains(&self.active_tab) {
@@ -546,9 +554,9 @@ impl eframe::App for BoincApp {
                     ],
                     NodeMode::Worker => vec![
                         (Tab::Connect, "Connect"),
+                        (Tab::Projects, "Projects"),
                         (Tab::Tasks, "Tasks"),
                         (Tab::Executor, "Executor"),
-                        (Tab::Packages, "Packages"),
                         (Tab::Network, "Network"),
                     ],
                     NodeMode::Peer => vec![
@@ -866,6 +874,7 @@ impl BoincApp {
                             NodeMode::Worker => self.send(AppCommand::ConnectWorker {
                                 coord_addr: self.coord_addr.clone(),
                                 name: self.my_name.clone(), balance,
+                                allowed_packages: self.exec_allowed_packages.clone(),
                             }),
                             NodeMode::Peer => {
                                 let bootstrap_peers = self.bootstrap_input
@@ -931,6 +940,10 @@ impl BoincApp {
             ui.centered_and_justified(|ui| {
                 ui.label(RichText::new("Not connected.").color(C_MUTED).size(14.0));
             });
+            return;
+        }
+        if self.node_mode == NodeMode::Worker {
+            self.draw_worker_projects_tab(ui);
             return;
         }
         ui.columns(2, |cols| {
@@ -1097,6 +1110,97 @@ impl BoincApp {
                     }
                 });
         });
+    }
+
+    // ── Worker Projects tab ──────────────────────────────────────────────────
+    /// Read-only project list pulled from the replicated blockchain state, with
+    /// a per-project donate control. Workers cannot create or fund projects.
+    fn draw_worker_projects_tab(&mut self, ui: &mut egui::Ui) {
+        let projects = self.snapshot.projects.clone();
+
+        ui.horizontal(|ui| {
+            section_header(ui, &format!("Projects ({})", projects.len()));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(format!("Balance: {}", self.my_balance()))
+                        .size(12.0)
+                        .color(TEXT_SEC),
+                );
+            });
+        });
+        ui.add_space(6.0);
+
+        let mut pending_donate: Option<(u64, u64)> = None;
+        let amounts = &mut self.worker_donate_amounts;
+        egui::ScrollArea::vertical()
+            .id_salt("worker_projects_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if projects.is_empty() {
+                    ui.label(RichText::new("No projects yet.").color(C_MUTED).size(13.0));
+                    return;
+                }
+                for p in &projects {
+                    card_frame().show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(&p.name).color(TEXT_PRI).size(13.0).strong());
+                            ui.label(
+                                RichText::new(format!("#{}", p.id))
+                                    .color(C_MUTED)
+                                    .size(11.0)
+                                    .monospace(),
+                            );
+                        });
+                        ui.add_space(4.0);
+                        let total = p.quota_available + p.quota_locked;
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Available:").size(11.0).color(TEXT_SEC));
+                            let frac = if total > 0 {
+                                p.quota_available as f32 / total as f32
+                            } else {
+                                0.0
+                            };
+                            ui.add(
+                                egui::ProgressBar::new(frac)
+                                    .desired_width(100.0)
+                                    .fill(C_SUCCESS),
+                            );
+                            ui.label(
+                                RichText::new(p.quota_available.to_string())
+                                    .size(11.0)
+                                    .color(C_SUCCESS),
+                            );
+                        });
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            let amount = amounts.entry(p.id).or_default();
+                            ui.add_sized(
+                                [90.0, 28.0],
+                                egui::TextEdit::singleline(amount).hint_text("amount"),
+                            );
+                            if ui
+                                .add_sized(
+                                    [90.0, 28.0],
+                                    Button::new(RichText::new("Donate").color(BG_APP)).fill(ACCENT),
+                                )
+                                .clicked()
+                            {
+                                if let Ok(amt) = amount.parse::<u64>() {
+                                    if amt > 0 {
+                                        pending_donate = Some((p.id, amt));
+                                        amount.clear();
+                                    }
+                                }
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
+                }
+            });
+
+        if let Some((project_id, amount)) = pending_donate {
+            self.send(AppCommand::DonateToProject { project_id, amount });
+        }
     }
 
     // ── Tasks tab ────────────────────────────────────────────────────────────

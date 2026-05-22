@@ -1,14 +1,18 @@
-# Python interpreter for PyO3. The isolated interpreter needs smolagents
-# (Python >=3.10); the system python3.9 cannot install it. We use the project
-# venv (.venv, brew python@3.12) and force it so builds/runs are deterministic.
+# Build links PyO3 against the bundled python-build-standalone interpreter in
+# vendor/python (fetched by scripts/fetch-python.sh). This makes the embedded
+# interpreter self-contained — no dependency on a system Python.
+#
+# These paths are absolute for the dev checkout. A release build/installer ships
+# vendor/python next to the binary and relies on a relative rpath + PYTHONHOME
+# resolved at runtime (see src/pyenv.rs).
 [env]
-PYO3_PYTHON = { value = "/Users/dmitryzap/Projects/learning/boinc-qouta-rs/.venv/bin/python3.12", force = true }
-# Make the venv's smolagents importable by the embedded interpreter at runtime
-# (covers `cargo run`; direct binary runs are covered by PYO3_PYTHON's venv prefix).
-PYTHONPATH = { value = "/Users/dmitryzap/Projects/learning/boinc-qouta-rs/.venv/lib/python3.12/site-packages", force = true }
+PYO3_PYTHON = { value = "/Users/dmitryzap/Projects/learning/boinc-qouta-rs/vendor/python/bin/python3.12", force = true }
+# Embedded interpreter's stdlib home (dev/tests). At release this is set at
+# runtime by pyenv::prepare_embedded_python from the exe-relative bundle.
+PYTHONHOME = { value = "/Users/dmitryzap/Projects/learning/boinc-qouta-rs/vendor/python", force = true }
 
 [build]
 rustflags = [
-  "-L", "/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/lib",
-  "-C", "link-arg=-Wl,-rpath,/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Versions/3.12/lib",
+  "-L", "/Users/dmitryzap/Projects/learning/boinc-qouta-rs/vendor/python/lib",
+  "-C", "link-arg=-Wl,-rpath,/Users/dmitryzap/Projects/learning/boinc-qouta-rs/vendor/python/lib",
 ]

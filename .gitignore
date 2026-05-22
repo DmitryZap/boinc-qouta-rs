@@ -1,3 +1,6 @@
 /target
 /.venv
 .DS_Store
+
+# Bundled python-build-standalone (fetch via scripts/fetch-python.sh)
+/vendor/

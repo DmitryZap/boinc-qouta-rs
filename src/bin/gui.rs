@@ -6,6 +6,10 @@ use boinc_quota_rs::protocol::{AppCommand, AppEvent};
 use eframe::egui;
 
 fn main() {
+    // Point the embedded interpreter at the bundled python stdlib before any
+    // Python is initialized.
+    boinc_quota_rs::pyenv::prepare_embedded_python();
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

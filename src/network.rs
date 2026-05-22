@@ -152,9 +152,9 @@ impl Network {
     }
 
     /// Register a participant with an explicit, externally-chosen id (the
-    /// pubkey-derived account address). Idempotent — a repeated registration of
-    /// a known id is a no-op, so applying the same op on every replica (or
-    /// re-applying during sync) is safe. Mints `initial_balance` on first sight.
+    /// pubkey-derived account address). Idempotent: registering a known id is a
+    /// no-op, so applying the same op on every replica (or re-applying during
+    /// sync) is safe. Mints `initial_balance` on first sight.
     pub fn register_participant_with_id(
         &mut self,
         id: ParticipantId,
@@ -184,9 +184,8 @@ impl Network {
 
     /// Apply one consensus-ordered operation to the replica. Deterministic:
     /// given identical prior state and op, every node reaches identical state.
-    /// Operation errors (e.g. insufficient balance) are deterministic too, so
-    /// they are silently ignored — the failed op simply leaves state unchanged
-    /// on every node alike.
+    /// Operation errors (e.g. insufficient balance) are deterministic too and so
+    /// are silently ignored: a failed op leaves state unchanged on every node.
     pub fn apply_op(&mut self, op: &LedgerOp) {
         match op {
             LedgerOp::RegisterParticipant {
@@ -262,8 +261,8 @@ impl Network {
     }
 
     /// Canonical, order-independent hash of the full replicated state. Two nodes
-    /// that applied the same op log must produce the same fingerprint — this is
-    /// the convergence check used by tests and the smoke binary.
+    /// that applied the same op log must produce the same fingerprint, the
+    /// convergence check used by tests and the smoke binary.
     pub fn state_fingerprint(&self) -> [u8; 32] {
         let mut h = Sha256::new();
         h.update(self.current_tick.to_le_bytes());
@@ -350,8 +349,7 @@ impl Network {
         Ok(())
     }
 
-    /// Direct token transfer between participant accounts. Checks the sender's
-    /// committed balance, then records the transfer on the economic ledger.
+    /// Direct token transfer between participant accounts.
     pub fn transfer(
         &mut self,
         from: ParticipantId,
@@ -531,7 +529,7 @@ impl Network {
     }
 
     /// Number of outstanding task leases. Used to decide whether the clock needs
-    /// to advance (lease expiry) — no leases means ticking is pointless.
+    /// to advance for lease expiry; no leases means ticking is pointless.
     pub fn lease_count(&self) -> usize {
         self.leases.len()
     }
@@ -920,7 +918,7 @@ impl Network {
         }
         // HashMap iteration order is non-deterministic; sort so the emitted
         // slash transactions (and thus block contents / replica state) are
-        // identical on every node — required for the replicated state machine.
+        // identical on every node, as the replicated state machine requires.
         expired.sort_unstable();
 
         let mut slash_txs: Vec<Transaction> = Vec::new();

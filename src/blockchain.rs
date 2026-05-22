@@ -85,7 +85,7 @@ pub struct Block {
 
 impl Block {
     /// Hash commits to everything that defines the block *except* the vote
-    /// certificate — votes are gathered after the hash is fixed, so they sign it.
+    /// certificate, since votes are gathered after the hash is fixed and sign it.
     pub fn compute_hash(
         index: u64,
         tick: u64,
@@ -170,7 +170,7 @@ impl Blockchain {
 
     /// Append a block that was sealed elsewhere (consensus / sync). Validates
     /// the index, prev-hash linkage, and that the stored hash matches the
-    /// recomputed one. The vote certificate is NOT checked here — the caller
+    /// recomputed one. The vote certificate is NOT checked here: the caller
     /// (consensus engine) verifies signatures against the validator set, since
     /// the chain itself does not know who the validators are.
     pub fn append_committed(&mut self, block: Block) -> std::result::Result<(), &'static str> {

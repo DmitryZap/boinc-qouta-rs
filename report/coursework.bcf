@@ -2402,10 +2402,12 @@
     <bcf:citekey order="25" intorder="2">docker_docs</bcf:citekey>
     <bcf:citekey order="26" intorder="1">byzantine_generals</bcf:citekey>
     <bcf:citekey order="26" intorder="2">pbft</bcf:citekey>
-    <bcf:citekey order="27" intorder="1">merkle_1979</bcf:citekey>
-    <bcf:citekey order="28" intorder="1">nakamoto_bitcoin</bcf:citekey>
-    <bcf:citekey order="29" intorder="1">fips_180_4</bcf:citekey>
-    <bcf:citekey order="30" intorder="1">egui_crate</bcf:citekey>
+    <bcf:citekey order="27" intorder="1">byzantine_generals</bcf:citekey>
+    <bcf:citekey order="27" intorder="2">pbft</bcf:citekey>
+    <bcf:citekey order="28" intorder="1">merkle_1979</bcf:citekey>
+    <bcf:citekey order="29" intorder="1">nakamoto_bitcoin</bcf:citekey>
+    <bcf:citekey order="30" intorder="1">fips_180_4</bcf:citekey>
+    <bcf:citekey order="31" intorder="1">egui_crate</bcf:citekey>
   </bcf:section>
   <!-- SORTING TEMPLATES -->
   <bcf:sortingtemplate name="nty">

@@ -190,12 +190,11 @@ impl Executor {
         }
     }
 
-    /// Run a Python payload in the isolated interpreter (single execution path).
+    /// Run a Python payload in the isolated interpreter.
     ///
-    /// The former GPU/Docker branches are gone: `python-gpu:` payloads run
-    /// through the same interpreter (no real GPU). The interpreter enforces the
-    /// import allowlist, blocks submodule access, and caps operations so
-    /// infinite loops surface as a timeout/budget-exhausted result.
+    /// `python-gpu:` payloads run through the same interpreter (no real GPU).
+    /// The interpreter enforces the import allowlist, blocks submodule access,
+    /// and caps operations so infinite loops surface as a timeout result.
     fn run_python_payload(
         &self,
         task_id: u64,

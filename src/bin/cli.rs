@@ -44,7 +44,7 @@ fn has_flag(args: &[String], key: &str) -> bool {
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  cli coordinator --listen ADDR [--peers a,b] [--name N] [--balance N] [--identity PATH]\n  cli worker --coord ADDR [--name N] [--balance N] [--exec] [--identity PATH]\n\nstdin commands: project NAME | fund PID AMT | donate PID AMT |\n  task PID REWARD CODE... | send TO AMT | exec start|stop | state | sleep MS | quit"
+        "usage:\n  cli coordinator --listen ADDR [--peers a,b] [--name N] [--balance N] [--identity PATH]\n  cli worker --coord ADDR [--name N] [--balance N] [--packages torch,numpy] [--identity PATH]\n\nstdin commands: project NAME | fund PID AMT | donate PID AMT |\n  task PID REWARD CODE... | send TO AMT | exec start|stop | state | sleep MS | quit"
     );
     std::process::exit(2);
 }
@@ -90,6 +90,9 @@ fn main() {
             coord_addr: arg_val(&args, "--coord").unwrap_or_else(|| "127.0.0.1:7878".to_string()),
             name: name.clone(),
             balance,
+            allowed_packages: arg_val(&args, "--packages")
+                .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
+                .unwrap_or_default(),
         },
         _ => usage(),
     };

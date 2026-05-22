@@ -107,7 +107,7 @@ pub enum P2pMessage {
     Consensus(ConsensusMsg),
 }
 
-// App UI → NetworkActor (local channel)
+// App UI -> NetworkActor (local channel)
 #[derive(Debug)]
 pub enum AppCommand {
     ConnectCoordinator {
@@ -123,6 +123,9 @@ pub enum AppCommand {
         coord_addr: String,
         name: String,
         balance: u64,
+        /// Extra import allowlist for the worker's auto-started executor (e.g.
+        /// "torch"). Empty = the default stdlib allowlist.
+        allowed_packages: Vec<String>,
     },
     CreateProject {
         name: String,
@@ -162,7 +165,7 @@ pub enum AppCommand {
     Disconnect,
 }
 
-// NetworkActor → App UI (local channel)
+// NetworkActor -> App UI (local channel)
 #[derive(Debug, Clone)]
 pub enum AppEvent {
     Connected,
@@ -182,10 +185,9 @@ pub enum AppEvent {
     Error(String),
 }
 
-// Worker → Coordinator (TCP, line-delimited JSON)
+// Worker -> Coordinator (TCP, line-delimited JSON)
 #[derive(Debug, Serialize, Deserialize)]
 pub enum PeerRequest {
-    // Auth handshake (replaces Register)
     Hello {
         name: String,
         public_key: [u8; 32],
@@ -195,7 +197,6 @@ pub enum PeerRequest {
         public_key: [u8; 32],
         nonce_signature: Vec<u8>,
     },
-    // Existing operations
     CreateProject {
         name: String,
         owner_encryption_pubkey: Option<[u8; 32]>,
@@ -231,10 +232,9 @@ pub enum PeerRequest {
     GetState,
 }
 
-// Coordinator → Worker (TCP, line-delimited JSON)
+// Coordinator -> Worker (TCP, line-delimited JSON)
 #[derive(Debug, Serialize, Deserialize)]
 pub enum PeerResponse {
-    // Auth
     Challenge {
         participant_id: ParticipantId,
         nonce: [u8; 32],
@@ -242,7 +242,6 @@ pub enum PeerResponse {
     Denied {
         reason: String,
     },
-    // Existing responses
     Welcome {
         participant_id: ParticipantId,
     },

@@ -7,19 +7,19 @@
 //! [`Network`] replica via [`Network::apply_op`], so all nodes converge on
 //! byte-identical state (balances, projects, tasks, reputation).
 //!
-//! This module is pure logic — no I/O. The network layer relays every inbound
+//! This module is pure logic with no I/O. The network layer relays every inbound
 //! [`ConsensusMsg`] across the mesh (with seen-set dedup); the engine only
 //! originates new messages (its own votes, proposals, commit certificates).
 //!
 //! Round per height H = `next_index()`:
 //!   1. Proposer for H (round-robin `validators[H % n]`) drains its mempool into
-//!      a candidate [`OpBlock`], signs it, emits `Propose` + its own `Vote`.
+//!      a candidate [`OpBlock`], signs it, emits `Propose` plus its own `Vote`.
 //!   2. Each validator validates the proposal and emits a signed `Vote`.
 //!   3. When votes for one block hash reach quorum, the block is sealed with that
 //!      certificate, appended, its ops applied to the replica, and broadcast as
 //!      `Committed`.
 //!
-//! Out of scope (coursework simulation): view changes / proposer failover,
+//! Out of scope (coursework simulation): view changes, proposer failover,
 //! equivocation slashing, dynamic-validator-set reconfiguration safety.
 
 use std::collections::{BTreeSet, HashMap};
@@ -43,7 +43,7 @@ pub struct OpBlock {
     /// Number of validator signatures required to seal this block, fixed by the
     /// proposer at propose time. Stored so a node that later learns of more
     /// validators (larger quorum) still accepts blocks sealed earlier under a
-    /// smaller validator set — otherwise late joiners reject early blocks and
+    /// smaller validator set; otherwise late joiners reject early blocks and
     /// never converge.
     #[serde(default)]
     pub quorum: usize,
@@ -106,7 +106,7 @@ impl OpBlock {
 }
 
 /// BFT quorum threshold for `n` validators: `floor(2n/3) + 1`.
-/// n=1→1, n=2→2, n=3→3, n=4→3, n=7→5.
+/// n=1 gives 1, n=2 gives 2, n=3 gives 3, n=4 gives 3, n=7 gives 5.
 pub fn quorum_for(n: usize) -> usize {
     (2 * n) / 3 + 1
 }
@@ -133,7 +133,7 @@ pub enum ConsensusMsg {
     SyncResponse { blocks: Vec<OpBlock> },
 }
 
-/// Votes accumulated at one height: block hash → (voter → signature).
+/// Votes accumulated at one height, keyed by block hash then by voter.
 type HeightVotes = HashMap<[u8; 32], HashMap<NodeKey, Vec<u8>>>;
 
 pub struct ConsensusEngine {
@@ -144,8 +144,16 @@ pub struct ConsensusEngine {
     /// Hash-linked consensus log of op blocks (block 0 = genesis).
     chain: Vec<OpBlock>,
     mempool: Vec<LedgerOp>,
-    /// Known validators (includes self). Grows as proposers/voters are observed.
+    /// Every validator we have ever learned of (live or historical). Used only
+    /// to verify commit certificates: a block signed by a now-offline validator
+    /// must still validate. Grows monotonically and is never gossiped.
     validators: BTreeSet<NodeKey>,
+    /// Currently-active validators (always includes self). This is the set the
+    /// BFT quorum and the proposer rotation are computed over, so an offline node
+    /// neither inflates the quorum nor holds a proposer slot hostage. A node
+    /// enters on connect or on a live consensus message and leaves when its link
+    /// drops.
+    active: BTreeSet<NodeKey>,
     proposals: HashMap<u64, HashMap<[u8; 32], OpBlock>>,
     votes: HashMap<u64, HeightVotes>,
     voted: HashMap<u64, [u8; 32]>,
@@ -156,23 +164,33 @@ impl ConsensusEngine {
         let me = identity.public_key_bytes();
         let mut validators: BTreeSet<NodeKey> = initial_validators.into_iter().collect();
         validators.insert(me);
+        // At construction every known validator is presumed active; liveness is
+        // refined afterwards as links connect and drop.
+        let active = validators.clone();
         Self {
             identity,
             me,
             // Task-result quorum 1: a single worker's report finalizes a task.
             // All replicas use the same config, so state stays deterministic.
             // (This is the compute layer; block insertion still uses BFT quorum.)
-            state: Network::with_config(NetworkConfig {
-                consensus_quorum: 1,
-                ..NetworkConfig::default()
-            }),
+            state: Self::fresh_state(),
             chain: vec![OpBlock::genesis()],
             mempool: Vec::new(),
             validators,
+            active,
             proposals: HashMap::new(),
             votes: HashMap::new(),
             voted: HashMap::new(),
         }
+    }
+
+    /// A blank replica with the canonical config, used at startup and when
+    /// rebuilding state during a chain reorg.
+    fn fresh_state() -> Network {
+        Network::with_config(NetworkConfig {
+            consensus_quorum: 1,
+            ..NetworkConfig::default()
+        })
     }
 
     pub fn me(&self) -> NodeKey {
@@ -184,7 +202,7 @@ impl ConsensusEngine {
         &self.state
     }
 
-    /// Canonical hash of the replicated state — convergence check across nodes.
+    /// Canonical hash of the replicated state, used to check convergence across nodes.
     pub fn state_fingerprint(&self) -> [u8; 32] {
         self.state.state_fingerprint()
     }
@@ -198,18 +216,21 @@ impl ConsensusEngine {
         self.chain.clone()
     }
 
-    /// Replay a persisted chain (trusted: our own saved data — links and applies
-    /// ops without re-checking certificates). Genesis is already present, so
-    /// only blocks at the expected next index are applied, in order.
+    /// Replay a persisted chain (trusted: our own saved data, so it links and
+    /// applies ops without re-checking certificates). Genesis is already present,
+    /// so only blocks at the expected next index are applied, in order.
     pub fn restore_chain(&mut self, blocks: Vec<OpBlock>) {
         for block in blocks {
             if block.index != self.next_index() {
                 continue;
             }
-            self.add_validator(block.proposer);
+            // Historical membership only: a restored chain must not resurrect
+            // long-gone validators into the live quorum (that is what previously
+            // wedged a solo node behind an unreachable quorum).
+            self.note_validator(block.proposer);
             let voters: Vec<NodeKey> = block.votes.iter().map(|v| v.voter).collect();
             for v in voters {
-                self.add_validator(v);
+                self.note_validator(v);
             }
             self.append_and_apply(block);
         }
@@ -227,30 +248,57 @@ impl ConsensusEngine {
         self.chain.len() as u64
     }
 
+    /// Total validators ever known (live + historical).
     pub fn validator_count(&self) -> usize {
         self.validators.len()
     }
 
-    pub fn quorum(&self) -> usize {
-        quorum_for(self.validators.len())
+    /// Currently-active validators, the set quorum and proposer are based on.
+    pub fn active_count(&self) -> usize {
+        self.active.len()
     }
 
+    pub fn quorum(&self) -> usize {
+        quorum_for(self.active.len())
+    }
+
+    /// Register a validator we are actively in contact with (a new link, a live
+    /// consensus message, or membership gossip). Counts toward the active quorum
+    /// and the proposer rotation.
     pub fn add_validator(&mut self, key: NodeKey) {
+        self.validators.insert(key);
+        self.active.insert(key);
+    }
+
+    /// Register a validator known only from historical chain data (chain restore
+    /// or fork adoption). Needed so its past commit certificates still verify,
+    /// but it does NOT become active: an offline node that once voted cannot
+    /// inflate the live quorum or claim a proposer slot.
+    fn note_validator(&mut self, key: NodeKey) {
         self.validators.insert(key);
     }
 
-    /// All known validator keys (for membership gossip).
+    /// Mark a validator inactive when its link drops. Self is never removed, so a
+    /// solo node keeps an active set of one and can still make progress.
+    pub fn mark_inactive(&mut self, key: NodeKey) {
+        if key != self.me {
+            self.active.remove(&key);
+        }
+    }
+
+    /// Active validator keys (for liveness gossip to new peers). Historical-only
+    /// validators are deliberately excluded so stale membership never spreads.
     pub fn validators(&self) -> Vec<NodeKey> {
-        self.validators.iter().copied().collect()
+        self.active.iter().copied().collect()
     }
 
     pub fn proposer_for(&self, height: u64) -> Option<NodeKey> {
-        let n = self.validators.len();
+        let n = self.active.len();
         if n == 0 {
             return None;
         }
         let idx = (height % n as u64) as usize;
-        self.validators.iter().nth(idx).copied()
+        self.active.iter().nth(idx).copied()
     }
 
     fn am_proposer_for(&self, height: u64) -> bool {
@@ -322,14 +370,11 @@ impl ConsensusEngine {
                     vec![ConsensusMsg::SyncResponse { blocks }]
                 }
             }
-            ConsensusMsg::SyncResponse { blocks } => {
-                self.apply_sync_blocks(blocks);
-                vec![]
-            }
+            ConsensusMsg::SyncResponse { blocks } => self.apply_sync_blocks(blocks),
         }
     }
 
-    // ── handlers ──────────────────────────────────────────────────────────
+    // handlers
 
     fn on_propose(&mut self, block: OpBlock) -> Vec<ConsensusMsg> {
         self.add_validator(block.proposer);
@@ -393,11 +438,22 @@ impl ConsensusEngine {
     fn on_committed(&mut self, block: OpBlock) -> Vec<ConsensusMsg> {
         self.add_validator(block.proposer);
         let next = self.next_index();
+        // A committed block at an index we already hold but with a different hash
+        // means our chain has forked from the network's. Pull the peer's full
+        // chain so fork choice can decide which to keep.
         if block.index < next {
+            if self.chain[block.index as usize].hash != block.hash {
+                return vec![ConsensusMsg::SyncRequest { from_height: 0 }];
+            }
             return vec![];
         }
         if block.index > next {
             return vec![ConsensusMsg::SyncRequest { from_height: next }];
+        }
+        // index == next: extends our head only if it links. A non-linking block
+        // at the next height is also a fork, so fetch the full chain.
+        if block.prev_hash != self.head_hash() {
+            return vec![ConsensusMsg::SyncRequest { from_height: 0 }];
         }
         if self.verify_certificate(&block) {
             self.append_and_apply(block);
@@ -405,21 +461,98 @@ impl ConsensusEngine {
         vec![]
     }
 
-    fn apply_sync_blocks(&mut self, blocks: Vec<OpBlock>) {
+    fn apply_sync_blocks(&mut self, blocks: Vec<OpBlock>) -> Vec<ConsensusMsg> {
         let mut sorted = blocks;
         sorted.sort_by_key(|b| b.index);
-        for block in sorted {
-            if block.index != self.next_index() {
+
+        // A response carrying the full chain from genesis lets fork choice adopt
+        // it wholesale, the only way to recover from a divergent local chain.
+        if sorted.first().map(|b| b.index) == Some(0) {
+            self.try_adopt_chain(&sorted);
+            return vec![];
+        }
+
+        // Partial response: extend our head with contiguous, certified blocks.
+        let mut linked_any = false;
+        for block in &sorted {
+            if block.index != self.next_index() || block.prev_hash != self.head_hash() {
                 continue;
             }
-            let ok = block.index == 0 || self.verify_certificate(&block);
-            if ok {
-                self.append_and_apply(block);
+            if block.index == 0 || self.verify_certificate(block) {
+                self.append_and_apply(block.clone());
+                linked_any = true;
             }
         }
+
+        // Got blocks ahead of us that wouldn't link, so our chain has forked.
+        // Pull the peer's full chain so fork choice can decide.
+        if !linked_any && sorted.iter().any(|b| b.index >= self.next_index()) {
+            return vec![ConsensusMsg::SyncRequest { from_height: 0 }];
+        }
+        vec![]
     }
 
-    // ── helpers ───────────────────────────────────────────────────────────
+    /// Fork choice. If `blocks` is a valid chain from genesis that is *strictly
+    /// longer* than ours, rebuild the replica from it and replace our chain.
+    /// Returns whether it was adopted.
+    ///
+    /// Equal-length forks are deliberately NOT adopted: doing so would let a peer
+    /// that finalized a competing same-height block make us discard our own
+    /// committed block (e.g. a just-submitted task). Only a strictly longer chain
+    /// wins, since it carries strictly more committed work.
+    fn try_adopt_chain(&mut self, blocks: &[OpBlock]) -> bool {
+        if blocks.first().map(|b| b.index) != Some(0) {
+            return false;
+        }
+        // Validate links and hashes end to end.
+        let mut prev_hash = [0u8; 32];
+        for (i, b) in blocks.iter().enumerate() {
+            if b.index != i as u64 || b.prev_hash != prev_hash {
+                return false;
+            }
+            let expected =
+                OpBlock::compute_hash(b.index, &b.prev_hash, &b.proposer, &b.ops, b.quorum);
+            if b.hash != expected {
+                return false;
+            }
+            prev_hash = b.hash;
+        }
+        // Certificate checks need the validator set; register the chain's
+        // proposers and voters as historical members (not active liveness; the
+        // live peer that served this chain is marked active via its own link).
+        for b in blocks {
+            self.note_validator(b.proposer);
+            for v in &b.votes {
+                self.note_validator(v.voter);
+            }
+        }
+        if !blocks.iter().all(|b| self.verify_certificate(b)) {
+            return false;
+        }
+        if blocks.len() <= self.chain.len() {
+            return false;
+        }
+        // Rebuild the replica deterministically from the adopted chain.
+        let mut state = Self::fresh_state();
+        for b in blocks {
+            for op in &b.ops {
+                state.apply_op(op);
+            }
+        }
+        self.state = state;
+        self.chain = blocks.to_vec();
+        let mempool = std::mem::take(&mut self.mempool);
+        self.mempool = mempool
+            .into_iter()
+            .filter(|op| !self.chain.iter().any(|b| b.ops.contains(op)))
+            .collect();
+        self.proposals.clear();
+        self.votes.clear();
+        self.voted.clear();
+        true
+    }
+
+    // helpers
 
     fn cast_vote(&mut self, height: u64, block_hash: [u8; 32]) -> Vec<ConsensusMsg> {
         if self.voted.contains_key(&height) {
@@ -608,6 +741,73 @@ mod tests {
         assert_eq!(engines[0].state().balance_of(42), 100);
     }
 
+    /// Drive a single-validator engine to commit one op into a block.
+    fn commit_solo(e: &mut ConsensusEngine, op: LedgerOp) {
+        e.submit_local_op(op);
+        e.try_propose();
+    }
+
+    #[test]
+    fn divergent_chain_reorgs_to_longer_via_sync() {
+        // Two nodes that each built their own chain offline, forking at height 1.
+        let mut a = ConsensusEngine::new(Identity::generate(), []);
+        let mut b = ConsensusEngine::new(Identity::generate(), []);
+
+        // A's chain is longer (two blocks); B's diverges at height 1 (one block).
+        commit_solo(&mut a, LedgerOp::RegisterParticipant {
+            id: 1, name: "A".into(), public_key: [1u8; 32], initial_balance: 100,
+        });
+        commit_solo(&mut a, LedgerOp::RegisterParticipant {
+            id: 2, name: "B".into(), public_key: [2u8; 32], initial_balance: 50,
+        });
+        commit_solo(&mut b, LedgerOp::RegisterParticipant {
+            id: 9, name: "Z".into(), public_key: [9u8; 32], initial_balance: 7,
+        });
+
+        assert_eq!(a.block_count(), 3);
+        assert_eq!(b.block_count(), 2);
+        assert_ne!(a.head_hash(), b.head_hash());
+
+        // B receives A's full chain and adopts it via fork choice (longer wins).
+        let out = b.on_message(ConsensusMsg::SyncResponse { blocks: a.chain_blocks() });
+        assert!(out.is_empty());
+
+        assert_eq!(b.block_count(), a.block_count());
+        assert_eq!(b.head_hash(), a.head_hash());
+        assert_eq!(b.state_fingerprint(), a.state_fingerprint());
+        // B's old divergent state is gone; A's state is now live on B.
+        assert_eq!(b.state().balance_of(1), 100);
+        assert_eq!(b.state().balance_of(2), 50);
+        assert_eq!(b.state().balance_of(9), 0);
+    }
+
+    #[test]
+    fn equal_length_fork_is_not_adopted() {
+        // Two nodes with same-length but divergent chains must NOT steal each
+        // other's committed work — otherwise a peer's competing same-height block
+        // would silently drop our own (e.g. a just-submitted task).
+        let mut a = ConsensusEngine::new(Identity::generate(), []);
+        let mut b = ConsensusEngine::new(Identity::generate(), []);
+
+        commit_solo(&mut a, LedgerOp::RegisterParticipant {
+            id: 1, name: "A".into(), public_key: [1u8; 32], initial_balance: 100,
+        });
+        commit_solo(&mut b, LedgerOp::RegisterParticipant {
+            id: 2, name: "B".into(), public_key: [2u8; 32], initial_balance: 50,
+        });
+        assert_eq!(a.block_count(), b.block_count());
+
+        let a_head = a.head_hash();
+        let a_fp = a.state_fingerprint();
+        // A receives B's equal-length chain — keeps its own, regardless of hash order.
+        let out = a.on_message(ConsensusMsg::SyncResponse { blocks: b.chain_blocks() });
+        assert!(out.is_empty());
+        assert_eq!(a.head_hash(), a_head);
+        assert_eq!(a.state_fingerprint(), a_fp);
+        assert_eq!(a.state().balance_of(1), 100);
+        assert_eq!(a.state().balance_of(2), 0);
+    }
+
     #[test]
     fn four_nodes_converge_on_identical_state() {
         let mut engines = make_network(4);
@@ -660,6 +860,59 @@ mod tests {
             })
             .collect();
         assert!(!engines[0].verify_certificate(&block));
+    }
+
+    #[test]
+    fn inactive_validators_shrink_quorum() {
+        // Three validators known, but two have dropped their links. Quorum and
+        // the proposer rotation must follow the active set, not the full one.
+        let me = Identity::generate();
+        let others: Vec<NodeKey> = (0..2).map(|_| Identity::generate().public_key_bytes()).collect();
+        let mut e = ConsensusEngine::new(me, others.clone());
+        assert_eq!(e.active_count(), 3);
+        assert_eq!(e.quorum(), quorum_for(3));
+
+        for k in &others {
+            e.mark_inactive(*k);
+        }
+        assert_eq!(e.active_count(), 1, "self stays active");
+        assert_eq!(e.validator_count(), 3, "historical set unchanged");
+        assert_eq!(e.quorum(), 1);
+
+        // With quorum 1 the lone active node finalizes its own op.
+        e.submit_local_op(LedgerOp::RegisterParticipant {
+            id: 5, name: "S".into(), public_key: [5u8; 32], initial_balance: 42,
+        });
+        e.try_propose();
+        assert_eq!(e.block_count(), 2);
+        assert_eq!(e.state().balance_of(5), 42);
+    }
+
+    #[test]
+    fn restore_does_not_reactivate_offline_validators() {
+        // A chain authored by other (now-offline) validators is restored. Those
+        // validators must be known (so old certificates verify) but NOT active,
+        // so a solo node restarting alone still reaches quorum and progresses.
+        let mut donor = ConsensusEngine::new(Identity::generate(), []);
+        commit_solo(&mut donor, LedgerOp::RegisterParticipant {
+            id: 1, name: "A".into(), public_key: [1u8; 32], initial_balance: 100,
+        });
+        let saved = donor.chain_blocks();
+
+        let mut node = ConsensusEngine::new(Identity::generate(), []);
+        node.restore_chain(saved);
+        assert_eq!(node.block_count(), 2, "restored donor's block");
+        assert_eq!(node.active_count(), 1, "only self is active after restore");
+        assert_eq!(node.quorum(), 1);
+        assert!(node.validator_count() >= 2, "donor remembered for cert checks");
+
+        // The solo node can still commit fresh ops on top of the restored chain.
+        node.submit_local_op(LedgerOp::RegisterParticipant {
+            id: 2, name: "B".into(), public_key: [2u8; 32], initial_balance: 7,
+        });
+        node.try_propose();
+        assert_eq!(node.block_count(), 3);
+        assert_eq!(node.state().balance_of(2), 7);
     }
 
     #[test]

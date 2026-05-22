@@ -1,22 +1,12 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::ffi::CString;
-use std::process::Command;
 use std::sync::{mpsc, LazyLock};
 use std::time::Duration;
 
-/// Modules user code is allowed to import inside the isolated interpreter.
-///
-/// smolagents' `LocalPythonExecutor` verifies at construction time that every
-/// authorized import is actually installed, so this list must contain only
-/// importable modules (all stdlib here). Submodule access (e.g. `random._os`)
-/// is blocked by the interpreter regardless of this list.
-/// Default *additional* imports beyond smolagents' built-in safe baseline.
-///
-/// `LocalPythonExecutor` always permits a base set of safe stdlib modules
-/// (math, random, datetime, collections, itertools, re, statistics, time, …);
-/// the list passed to it is *additional* on top of that. These are the extra
-/// stdlib modules we enable by default — all importable, so interpreter setup
+/// Extra stdlib imports enabled by default, on top of smolagents'
+/// `LocalPythonExecutor` safe baseline (math, random, datetime, collections,
+/// itertools, re, statistics, time, ...). All importable, so interpreter setup
 /// never fails on them.
 const ALLOWED: &[&str] = &[
     "cmath", "decimal", "fractions", "functools", "heapq", "bisect", "operator", "string", "io",
@@ -24,9 +14,7 @@ const ALLOWED: &[&str] = &[
     "array", "pprint", "textwrap",
 ];
 
-/// Default additional-import allowlist offered to the user as a starting point.
-/// Callers may pass any list to [`run_python_sandboxed`]; modules in the
-/// interpreter's safe baseline are allowed regardless of this list.
+/// Default additional-import allowlist offered as a starting point.
 pub fn default_allowed_packages() -> Vec<String> {
     ALLOWED.iter().map(|s| s.to_string()).collect()
 }
@@ -34,19 +22,19 @@ pub fn default_allowed_packages() -> Vec<String> {
 /// Python glue that runs user code through smolagents' isolated interpreter.
 ///
 /// Inputs (set in the run globals before execution):
-///   * `__user_code__` — the code string to execute.
-///   * `__allowed__`   — list of authorized import names.
-///   * `__timeout__`   — wall-clock cap (seconds) handed to the interpreter.
+///   * `__user_code__` - the code string to execute.
+///   * `__allowed__`   - list of authorized import names.
+///   * `__timeout__`   - wall-clock cap (seconds) handed to the interpreter.
 ///
 /// Outputs (read back from the same globals):
-///   * `__stdout__`     — captured print output (also on failure: partial).
-///   * `__success__`    — bool, True if code ran without raising.
-///   * `__operations__` — interpreter operation counter (dynamic work metric).
-///   * `__timed_out__`  — bool, True when the op-cap / timeout tripped.
-///   * `__err__`        — error message (empty on success).
+///   * `__stdout__`     - captured print output (partial on failure).
+///   * `__success__`    - bool, True if code ran without raising.
+///   * `__operations__` - interpreter operation counter (dynamic work metric).
+///   * `__timed_out__`  - bool, True when the op-cap / timeout tripped.
+///   * `__err__`        - error message (empty on success).
 ///
-/// `LocalPythonExecutor` enforces: import allowlist, blocked submodule access,
-/// and a hard cap on executed operations (stops infinite loops without a kill).
+/// The interpreter enforces the import allowlist, blocks submodule access, and
+/// caps executed operations (stops infinite loops without a kill).
 const GLUE: &str = r#"
 import sys as _sys
 for _p in __extra_paths__:
@@ -67,7 +55,7 @@ try:
 except InterpreterError as e:
     __err__ = str(e)
     __stdout__ = str(_executor.state.get("_print_outputs", ""))
-except Exception as e:  # noqa: BLE001 — surface any interpreter-level failure
+except Exception as e:  # noqa: BLE001 - surface any interpreter-level failure
     __err__ = "{}: {}".format(type(e).__name__, e)
     __stdout__ = str(_executor.state.get("_print_outputs", ""))
 
@@ -83,8 +71,6 @@ __timed_out__ = (
 
 static GLUE_CSTR: LazyLock<CString> =
     LazyLock::new(|| CString::new(GLUE).expect("GLUE contains no null bytes"));
-
-// ── Public types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
 pub enum SandboxError {
@@ -107,22 +93,18 @@ impl std::fmt::Display for SandboxError {
 pub struct SandboxResult {
     pub stdout: String,
     pub success: bool,
-    /// Operations executed by the interpreter — a deterministic, execution-path
+    /// Operations executed by the interpreter: a deterministic, execution-path
     /// dependent measure of computational work (used for dynamic cost).
     pub operations: u64,
 }
 
-// ── Public entry-point ───────────────────────────────────────────────────────
-
 /// Run `code` in the smolagents isolated interpreter.
 ///
-/// * Printed output is captured into `SandboxResult::stdout`.
-/// * Non-allowlisted imports and submodule access (`random._os`) raise inside
-///   the interpreter and surface as `success = false`.
-/// * Infinite loops trip the interpreter's operation cap and return
-///   `SandboxError::Timeout`; `timeout_secs` is also passed to the interpreter
-///   and backstopped by a wall-clock thread timeout.
-/// * If smolagents is not installed, returns `SandboxError::Unavailable`.
+/// Printed output is captured into `SandboxResult::stdout`. Non-allowlisted
+/// imports and submodule access raise and surface as `success = false`.
+/// Infinite loops trip the operation cap and return `SandboxError::Timeout`
+/// (backstopped by a wall-clock thread timeout). If smolagents is not
+/// installed, returns `SandboxError::Unavailable`.
 pub fn run_python_sandboxed(
     code: &str,
     timeout_secs: u64,
@@ -147,9 +129,7 @@ pub fn run_python_sandboxed(
         .map_err(|_| SandboxError::Timeout)?
 }
 
-// ── Internals ────────────────────────────────────────────────────────────────
-
-/// Accept only safe module/package names (block python-code injection via the
+/// Accept only safe module/package names (block code injection via the
 /// `import <name>` probe and stray pip args).
 fn is_valid_package_name(name: &str) -> bool {
     !name.is_empty()
@@ -161,7 +141,7 @@ fn is_valid_package_name(name: &str) -> bool {
 /// Outcome of auto-installing one package.
 #[derive(Debug, Clone)]
 pub enum InstallOutcome {
-    /// Module already importable (stdlib or previously installed) — skipped.
+    /// Module already importable (stdlib or previously installed).
     AlreadyPresent,
     /// `pip install` succeeded.
     Installed,
@@ -169,9 +149,8 @@ pub enum InstallOutcome {
     Failed(String),
 }
 
-/// Ensure each package is importable by the venv interpreter, pip-installing the
-/// missing ones into the venv. Stdlib and already-installed modules are skipped.
-/// Returns one outcome per input package.
+/// Ensure each package is importable by the venv interpreter, pip-installing
+/// missing ones. Returns one outcome per input package.
 pub fn ensure_packages_installed(packages: &[String]) -> Vec<(String, InstallOutcome)> {
     packages
         .iter()
@@ -188,7 +167,7 @@ fn ensure_one(pkg: &str) -> InstallOutcome {
         return InstallOutcome::Failed("Python environment unavailable".to_string());
     };
 
-    let importable = Command::new(&venv_python)
+    let importable = crate::pyenv::venv_command(&venv_python)
         .args(["-c", &format!("import {pkg}")])
         .output()
         .map(|o| o.status.success())
@@ -197,7 +176,7 @@ fn ensure_one(pkg: &str) -> InstallOutcome {
         return InstallOutcome::AlreadyPresent;
     }
 
-    match Command::new(&venv_python)
+    match crate::pyenv::venv_command(&venv_python)
         .args(["-m", "pip", "install", "--disable-pip-version-check", "-q", pkg])
         .output()
     {
@@ -246,8 +225,8 @@ fn run_in_gil(
         .set_item("__allowed__", allowed)
         .map_err(|e| SandboxError::Unavailable(format!("set __allowed__: {e}")))?;
 
-    // Ensure smolagents is importable regardless of how the binary was launched:
-    // seed sys.path from runtime PYTHONPATH plus the project venv site-packages.
+    // Seed sys.path from runtime PYTHONPATH plus the project venv site-packages
+    // so smolagents is importable regardless of how the binary was launched.
     let extra = PyList::new(py, extra_python_paths())
         .map_err(|e| SandboxError::Unavailable(format!("build extra paths: {e}")))?;
     globals
@@ -255,7 +234,7 @@ fn run_in_gil(
         .map_err(|e| SandboxError::Unavailable(format!("set __extra_paths__: {e}")))?;
 
     // A failure here means the interpreter itself could not be set up
-    // (e.g. smolagents not installed) — distinct from user-code errors, which
+    // (e.g. smolagents not installed), distinct from user-code errors, which
     // the glue catches internally.
     py.run(GLUE_CSTR.as_c_str(), Some(&globals), None)
         .map_err(|e| SandboxError::Unavailable(format!("interpreter setup failed: {e}")))?;
@@ -294,8 +273,6 @@ fn run_in_gil(
         operations,
     })
 }
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

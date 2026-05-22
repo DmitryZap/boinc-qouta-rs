@@ -6,7 +6,7 @@ const DEFAULT_RUN_TIMEOUT_SECS: u64 = 10;
 const MIN_SUGGESTED_TIMEOUT_SECS: u64 = 1;
 
 /// Interpreter operations treated as one CPU-second of work. The isolated
-/// interpreter caps loops at ~1M operations, so 1M ops ≈ one second of budget.
+/// interpreter caps loops at ~1M operations, so 1M ops is about one second.
 const OPS_PER_CPU_SEC: f64 = 1_000_000.0;
 
 #[derive(Debug, Clone, Default)]
@@ -153,10 +153,9 @@ impl Estimator {
     }
 
     /// Run `source` in the isolated interpreter and derive dynamic
-    /// `ResourceMetrics` from the actual execution: the interpreter's operation
-    /// counter (deterministic, execution-path dependent) maps to CPU-seconds,
-    /// and wall-clock is measured around the call. `allowed_packages` is the
-    /// user-managed import allowlist handed to the interpreter.
+    /// `ResourceMetrics` from the run: the interpreter's operation counter maps
+    /// to CPU-seconds, and wall-clock is measured around the call.
+    /// `allowed_packages` is the user-managed import allowlist.
     pub fn measure_via_sandbox(
         &self,
         source: &str,

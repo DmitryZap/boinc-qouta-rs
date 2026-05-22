@@ -78,6 +78,36 @@
       \field{pages}{229}
       \range{pages}{1}
     \endentry
+    \entry{boincwebsite_arcitecture}{online}{}{}
+      \name{author}{1}{}{%
+        {{hash=d635c357a27ae0fe81ee61ae963be443}{%
+           family={{BOINC Project}},
+           familyi={B\bibinitperiod}}}%
+      }
+      \strng{namehash}{d635c357a27ae0fe81ee61ae963be443}
+      \strng{fullhash}{d635c357a27ae0fe81ee61ae963be443}
+      \strng{fullhashraw}{d635c357a27ae0fe81ee61ae963be443}
+      \strng{bibnamehash}{d635c357a27ae0fe81ee61ae963be443}
+      \strng{authorbibnamehash}{d635c357a27ae0fe81ee61ae963be443}
+      \strng{authornamehash}{d635c357a27ae0fe81ee61ae963be443}
+      \strng{authorfullhash}{d635c357a27ae0fe81ee61ae963be443}
+      \strng{authorfullhashraw}{d635c357a27ae0fe81ee61ae963be443}
+      \field{sortinit}{B}
+      \field{sortinithash}{d7095fff47cda75ca2589920aae98399}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{title}{BOINC overview}
+      \field{urlday}{22}
+      \field{urlmonth}{5}
+      \field{urlyear}{2026}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://github.com/BOINC/boinc/wiki/BOINC-overview
+      \endverb
+      \verb{url}
+      \verb https://github.com/BOINC/boinc/wiki/BOINC-overview
+      \endverb
+    \endentry
     \entry{pbft}{inproceedings}{}{}
       \name{author}{2}{}{%
         {{hash=dbb70f8d2e7e56ff83c6ba7f8220e57f}{%
@@ -498,6 +528,41 @@
       \field{pages}{323\bibrangedash 356}
       \range{pages}{34}
     \endentry
+    \entry{golem_whitepaper}{report}{}{}
+      \name{author}{1}{}{%
+        {{hash=4d8571104d1c418263b6687e318f4bdd}{%
+           family={{The Golem Project}},
+           familyi={T\bibinitperiod}}}%
+      }
+      \list{institution}{1}{%
+        {Golem Factory GmbH}%
+      }
+      \strng{namehash}{4d8571104d1c418263b6687e318f4bdd}
+      \strng{fullhash}{4d8571104d1c418263b6687e318f4bdd}
+      \strng{fullhashraw}{4d8571104d1c418263b6687e318f4bdd}
+      \strng{bibnamehash}{4d8571104d1c418263b6687e318f4bdd}
+      \strng{authorbibnamehash}{4d8571104d1c418263b6687e318f4bdd}
+      \strng{authornamehash}{4d8571104d1c418263b6687e318f4bdd}
+      \strng{authorfullhash}{4d8571104d1c418263b6687e318f4bdd}
+      \strng{authorfullhashraw}{4d8571104d1c418263b6687e318f4bdd}
+      \field{sortinit}{T}
+      \field{sortinithash}{9af77f0292593c26bde9a56e688eaee9}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{title}{The Golem Project: A Decentralized Supercomputer (Crowdfunding Whitepaper)}
+      \field{type}{techreport}
+      \field{urlday}{22}
+      \field{urlmonth}{5}
+      \field{urlyear}{2026}
+      \field{year}{2016}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://assets.website-files.com/62446d07873fde065cbcb8d5/62446d07873fdeb626bcb927_Golemwhitepaper.pdf
+      \endverb
+      \verb{url}
+      \verb https://assets.website-files.com/62446d07873fde065cbcb8d5/62446d07873fdeb626bcb927_Golemwhitepaper.pdf
+      \endverb
+    \endentry
     \entry{tokio_rs}{online}{}{}
       \name{author}{1}{}{%
         {{hash=f386182c95bd1f3c679a3493d7e45617}{%
@@ -542,7 +607,6 @@
       \strng{authornamehash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
       \strng{authorfullhash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
       \strng{authorfullhashraw}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
-      \field{extraname}{1}
       \field{sortinit}{U}
       \field{sortinithash}{6901a00e45705986ee5e7ca9fd39adca}
       \field{labelnamesource}{author}
@@ -557,76 +621,6 @@
       \endverb
       \verb{url}
       \verb https://boinc.berkeley.edu/
-      \endverb
-    \endentry
-    \entry{boincwebsite_arcitecture}{online}{}{}
-      \name{author}{1}{}{%
-        {{hash=e27e79c8e4c937cdf27b6f80f7fd7ba2}{%
-           family={{University of California, Berkeley}},
-           familyi={U\bibinitperiod}}}%
-      }
-      \strng{namehash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
-      \strng{fullhash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
-      \strng{fullhashraw}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
-      \strng{bibnamehash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
-      \strng{authorbibnamehash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
-      \strng{authornamehash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
-      \strng{authorfullhash}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
-      \strng{authorfullhashraw}{e27e79c8e4c937cdf27b6f80f7fd7ba2}
-      \field{extraname}{2}
-      \field{sortinit}{U}
-      \field{sortinithash}{6901a00e45705986ee5e7ca9fd39adca}
-      \field{labelnamesource}{author}
-      \field{labeltitlesource}{title}
-      \field{title}{How BOINC works}
-      \field{urlday}{20}
-      \field{urlmonth}{4}
-      \field{urlyear}{2025}
-      \field{urldateera}{ce}
-      \verb{urlraw}
-      \verb https://boinc.berkeley.edu/wiki/How_BOINC_works
-      \endverb
-      \verb{url}
-      \verb https://boinc.berkeley.edu/wiki/How_BOINC_works
-      \endverb
-    \endentry
-    \entry{golem_whitepaper}{report}{}{}
-      \true{moreauthor}
-      \true{morelabelname}
-      \name{author}{1}{}{%
-        {{hash=f7bde48ba15974cc9b284b06112df365}{%
-           family={Zamfir},
-           familyi={Z\bibinitperiod},
-           given={A.},
-           giveni={A\bibinitperiod}}}%
-      }
-      \list{institution}{1}{%
-        {Golem Factory GmbH}%
-      }
-      \strng{namehash}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
-      \strng{fullhash}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
-      \strng{fullhashraw}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
-      \strng{bibnamehash}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
-      \strng{authorbibnamehash}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
-      \strng{authornamehash}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
-      \strng{authorfullhash}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
-      \strng{authorfullhashraw}{519cf1c8f5d23b0a9ebe0a85dbc95e61}
-      \field{sortinit}{Z}
-      \field{sortinithash}{96892c0b0a36bb8557c40c49813d48b3}
-      \field{labelnamesource}{author}
-      \field{labeltitlesource}{title}
-      \field{title}{Golem: A Decentralized Supercomputer}
-      \field{type}{techreport}
-      \field{urlday}{20}
-      \field{urlmonth}{4}
-      \field{urlyear}{2025}
-      \field{year}{2016}
-      \field{urldateera}{ce}
-      \verb{urlraw}
-      \verb https://golem.network/golem_whitepaper.pdf
-      \endverb
-      \verb{url}
-      \verb https://golem.network/golem_whitepaper.pdf
       \endverb
     \endentry
     \entry{economic_model_article}{article}{}{}
@@ -659,8 +653,11 @@
       \field{title}{Экономическая модель планирования и справедливого разделения ресурсов в распределённых вычислениях}
       \field{volume}{40}
       \field{year}{2014}
-      \field{pages}{53\bibrangedash 62}
-      \range{pages}{10}
+      \field{pages}{35\bibrangedash 42}
+      \range{pages}{8}
+      \verb{doi}
+      \verb 10.1134/S0361768814010071
+      \endverb
     \endentry
   \enddatalist
 \endrefsection

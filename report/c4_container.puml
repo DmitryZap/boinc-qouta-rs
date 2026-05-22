@@ -12,28 +12,31 @@ System_Boundary(node, "Узел boinc-quota-rs (один процесс Rust)") 
 
     Container(gui, "GUI (Desktop App)", "Rust / eframe 0.34", "Отображает состояние сети, проекты, задачи, блокчейн.\nПринимает команды пользователя через интерактивные панели.")
 
-    Container(actor, "NetworkActor", "Rust / Tokio async", "Координирует всю сетевую логику.\nВ режиме координатора: принимает TCP-соединения, тикает часы сети.\nВ режиме воркера: подключается к координатору, управляет рабочим циклом.")
+    Container(actor, "NetworkActor", "Rust / Tokio async", "Координирует сетевую логику и P2P-мэш.\nРелеит сообщения консенсуса между пирами с дедупликацией (seen-set).\nВ режиме координатора принимает TCP-соединения и тикает часы сети.")
 
-    Container(network_engine, "Network Engine", "Rust (синхронный)", "Доменная модель: участники, проекты, задачи, аренда (lease), консенсус.\nРаспределяет награды, применяет штрафы, управляет очередью задач.")
+    Container(network_engine, "Network Engine", "Rust (синхронный)", "Доменная модель: участники, проекты, задачи, аренда (lease).\nРепутационно-взвешенный консенсус по результатам задач.\nРаспределяет награды, применяет штрафы, ведёт очередь задач.")
 
-    Container(blockchain, "Blockchain", "Rust (in-process)", "Связанный список блоков с SHA-256.\nФиксирует mint / transfer / burn транзакции.\nПроверяет целостность цепочки.")
+    Container(consensus, "Consensus Engine", "Rust (BFT)", "Распределённый консенсус вставки блоков.\nProposer round-robin, голоса валидаторов, кворумный сертификат.\nРеплицированная цепочка на каждом узле.")
 
-    Container(executor, "Executor", "Rust", "Берёт задачи из очереди и выполняет их.\nОпределяет payload-тип: Python / inference / детерминированный.\nВозвращает digest и stdout для консенсуса.")
+    Container(blockchain, "Blockchain", "Rust (in-process)", "Связанный список блоков с SHA-256.\nКаждый блок несёт BFT-сертификат (подписи валидаторов).\nФиксирует mint / transfer / burn, проверяет целостность цепочки.")
 
-    Container(estimator, "Estimator", "Rust + subprocess Python", "Оценивает ресурсы для Python-кода.\nЗапускает Python-subprocess для реального выполнения.\nВычисляет actual_cost по истекшему времени.")
+    Container(executor, "Executor", "Rust", "Берёт задачи из очереди и выполняет Python-payload.\nИзмеряет стоимость через Estimator.\nВозвращает digest и stdout для консенсуса.")
 
-    Container(compute_module, "Compute Module", "Rust / Docker API", "Запускает Python в изолированном Docker-контейнере (CPU или GPU).\nОграничивает память и время выполнения.")
+    Container(estimator, "Estimator", "Rust", "Предварительная оценка стоимости по исходнику.\nИзмеряет фактическую стоимость прогоном в песочнице.")
 
-    Container(sandbox, "Python Sandbox", "Rust / subprocess", "Fallback-исполнение Python без Docker.\nИспользуется когда Docker недоступен.")
+    Container(sandbox, "Python Sandbox", "Rust / PyO3", "Исполняет пользовательский Python во встроенном интерпретаторе (Python::attach / GIL).\nОграничивает доступные пакеты и время выполнения.")
 
-    Container(identity, "Identity", "Rust / Ed25519 + X25519", "Генерирует или загружает ключевую пару.\nПодписывает nonce при handshake.\nШифрует stdout-результаты для владельца проекта.")
+    Container(pyenv, "PyEnv", "Rust + Python (PyO3 0.28)", "Встроенный python-build-standalone рядом с бинарём.\nВыставляет PYTHONHOME, ведёт writable venv (smolagents + разрешённые пакеты).")
 
-    ContainerDb(identity_file, "Ключевая пара", "Файл (~/.local/share/boinc-quota/identity.json)", "Персистентный Ed25519 + X25519 keypair узла.")
+    Container(identity, "Identity", "Rust / Ed25519 + X25519", "Генерирует или загружает ключевую пару.\nПодписывает nonce при handshake и блоки в консенсусе.\nШифрует stdout-результаты для владельца проекта.")
 
-    ContainerDb(coord_state, "Состояние координатора", "Файл (~/.local/share/boinc-quota/coordinator-state.json)", "Сериализованное состояние Network (JSON).\nВосстанавливается при перезапуске.")
+    ContainerDb(identity_file, "Ключевая пара", "Файл (~/.boinc-quota/identity.json)", "Персистентный Ed25519 + X25519 keypair узла.")
+
+    ContainerDb(coord_state, "Состояние координатора", "Файл (<data_local_dir>/boinc-quota/coordinator-state.json)", "Сериализованное состояние Network (JSON).\nВосстанавливается при перезапуске.")
+
+    ContainerDb(python_bundle, "Python-бандл + venv", "Каталоги (python/ рядом с бинарём, venv в data dir)", "Встроенный интерпретатор и установленные пакеты.")
 }
 
-System_Ext(docker_daemon, "Docker Daemon", "Запускает Python-контейнеры (CPU / GPU)")
 System_Ext(remote_node, "Удалённый узел\n(Координатор или Воркер)", "Другой экземпляр boinc-quota-rs")
 
 ' User → GUI
@@ -44,10 +47,16 @@ Rel(gui, actor, "AppCommand", "mpsc channel")
 Rel(actor, gui, "AppEvent / StateUpdate", "mpsc channel")
 
 ' NetworkActor → Network Engine
-Rel(actor, network_engine, "register / create / submit / tick / consensus", "вызов методов")
+Rel(actor, network_engine, "register / create / submit / tick / task-consensus", "вызов методов")
 
-' Network Engine → Blockchain
+' Network Engine → Blockchain (режим координатора)
 Rel(network_engine, blockchain, "commit_block (mint / transfer / burn)", "вызов методов")
+
+' NetworkActor → Consensus Engine (распределённый режим)
+Rel(actor, consensus, "submit_local_tx / on_message / try_propose", "вызов методов")
+
+' Consensus Engine → Blockchain
+Rel(consensus, blockchain, "append (блок с BFT-сертификатом)", "вызов методов")
 
 ' NetworkActor → Executor
 Rel(actor, executor, "process_next_task", "spawn_blocking / tokio::spawn")
@@ -56,13 +65,13 @@ Rel(actor, executor, "process_next_task", "spawn_blocking / tokio::spawn")
 Rel(executor, network_engine, "request_task / heartbeat / submit_result", "вызов методов")
 
 ' Executor → Estimator
-Rel(executor, estimator, "estimate / run_and_measure", "вызов методов")
+Rel(executor, estimator, "pre_estimate / measure_via_sandbox", "вызов методов")
 
-' Executor → Compute Module
-Rel(executor, compute_module, "execute_python / execute_python_gpu", "вызов методов")
+' Estimator → Sandbox
+Rel(estimator, sandbox, "run_python_sandboxed", "вызов методов")
 
-' Executor → Sandbox
-Rel(executor, sandbox, "run_python_sandboxed (fallback)", "вызов методов")
+' Sandbox → PyEnv
+Rel(sandbox, pyenv, "venv interpreter / site-packages", "PyO3 + fs")
 
 ' Executor → Identity (шифрование результата)
 Rel(executor, identity, "encrypt_for (pubkey)", "вызов методов")
@@ -70,17 +79,17 @@ Rel(executor, identity, "encrypt_for (pubkey)", "вызов методов")
 ' Identity → файл
 Rel(identity, identity_file, "load / save", "fs I/O")
 
-' NetworkActor → Identity (handshake)
-Rel(actor, identity, "load_or_generate / sign_nonce", "вызов методов")
+' Consensus / Actor → Identity (подпись блоков, handshake)
+Rel(actor, identity, "load_or_generate / sign_nonce / sign_block", "вызов методов")
 
 ' NetworkActor → coord_state (персистентность)
 Rel(actor, coord_state, "persist / load", "serde_json + fs I/O")
 
-' Compute Module → Docker
-Rel(compute_module, docker_daemon, "HTTP API (bollard)", "Unix socket / TCP")
+' PyEnv → бандл
+Rel(pyenv, python_bundle, "resolve / pip install", "fs I/O")
 
-' NetworkActor ↔ Remote node
-Rel(actor, remote_node, "PeerRequest (JSON lines)", "TCP outbound (Worker→Coordinator)")
-Rel(remote_node, actor, "PeerResponse / StateUpdate (JSON lines)", "TCP inbound")
+' NetworkActor ↔ Remote node (P2P-мэш)
+Rel(actor, remote_node, "P2pMessage: PeerRequest / ConsensusMsg (JSON lines)", "TCP")
+Rel(remote_node, actor, "P2pMessage: PeerResponse / ConsensusMsg / StateUpdate", "TCP")
 
 @enduml
