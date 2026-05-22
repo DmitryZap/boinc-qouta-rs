@@ -897,8 +897,13 @@ async fn run_role_node(
                 let _ = evt_tx.send(AppEvent::StateUpdate(snap)).await;
             }
             _ = tick_timer.tick(), if role == NodeRole::Coordinator => {
-                // Coordinator advances the shared clock so leases expire.
-                submit_and_flood(&engine, &peers, &seen, LedgerOp::Tick { n: 1 }).await;
+                // Advance the shared clock only while task leases are outstanding
+                // (so they can expire). Idle ticks would commit empty blocks and
+                // bloat the chain.
+                let need_tick = engine.lock().await.state().lease_count() > 0;
+                if need_tick {
+                    submit_and_flood(&engine, &peers, &seen, LedgerOp::Tick { n: 1 }).await;
+                }
             }
             _ = sync_timer.tick() => {
                 let (from, pending) = {
@@ -1066,20 +1071,40 @@ async fn ops_executor_loop(
             }
             None => {
                 let pending = { engine.lock().await.state().pending_count() > 0 };
-                if pending {
-                    nonce += 1;
-                    submit_and_flood(
-                        &engine,
-                        &peers,
-                        &seen,
-                        LedgerOp::RequestTask {
-                            worker_id: my_addr,
-                            nonce,
-                        },
-                    )
-                    .await;
+                if !pending {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    continue;
                 }
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                // Claim one task, then wait for the assignment to commit before
+                // requesting again — at most one task in flight per worker, so
+                // tasks (and their rewards/reputation) spread across workers.
+                nonce += 1;
+                submit_and_flood(
+                    &engine,
+                    &peers,
+                    &seen,
+                    LedgerOp::RequestTask {
+                        worker_id: my_addr,
+                        nonce,
+                    },
+                )
+                .await;
+                for _ in 0..8 {
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                    let got = {
+                        let e = engine.lock().await;
+                        e.state().all_tasks().iter().any(|t| {
+                            matches!(
+                                &t.status,
+                                crate::model::TaskStatus::Assigned { worker_id, .. }
+                                    if *worker_id == my_addr
+                            ) && !processed.contains(&t.id)
+                        })
+                    };
+                    if got {
+                        break;
+                    }
+                }
             }
         }
     }

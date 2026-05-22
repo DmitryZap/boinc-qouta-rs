@@ -530,6 +530,12 @@ impl Network {
         self.pending_tasks.len()
     }
 
+    /// Number of outstanding task leases. Used to decide whether the clock needs
+    /// to advance (lease expiry) — no leases means ticking is pointless.
+    pub fn lease_count(&self) -> usize {
+        self.leases.len()
+    }
+
     pub fn all_participants(&self) -> Vec<&crate::model::Participant> {
         self.participants.values().collect()
     }
