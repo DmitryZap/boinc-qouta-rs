@@ -27,7 +27,8 @@ use std::io::BufRead;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+// Must match the executor's decoder (URL-safe, no padding), see executor.rs.
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64, Engine as _};
 use tokio::sync::mpsc;
 
 use boinc_quota_rs::actor::NetworkActor;
