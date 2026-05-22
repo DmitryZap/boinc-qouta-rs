@@ -1,6 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -43,7 +44,7 @@ impl NetworkActor {
                 } => {
                     // Coordinator: listens for workers/peer-coordinators and
                     // relays consensus gossip. Bootstrap = other coordinators.
-                    let identity = Identity::load_or_generate(&Identity::default_path());
+                    let identity = resolve_identity("coordinator", &listen_addr, &name);
                     run_role_node(
                         NodeRole::Coordinator,
                         &mut self.cmd_rx,
@@ -62,7 +63,7 @@ impl NetworkActor {
                     balance,
                 } => {
                     // Worker: dials its coordinator; no listener (hub topology).
-                    let identity = Identity::load_or_generate(&Identity::default_path());
+                    let identity = resolve_identity("worker", &coord_addr, &name);
                     run_role_node(
                         NodeRole::Worker,
                         &mut self.cmd_rx,
@@ -672,6 +673,26 @@ pub async fn p2p_node_with_identity(
         .await;
 }
 
+/// Pick the identity for a node. An explicit `BOINC_IDENTITY` env var always
+/// wins (used by the CLI and for stable single-node setups). Otherwise the
+/// identity is derived from the connection params (role + address + name) so
+/// several nodes launched locally each get a distinct, stable key automatically
+/// — no need to juggle `BOINC_IDENTITY` per instance. Different connection →
+/// different identity.
+fn resolve_identity(role: &str, addr: &str, name: &str) -> Identity {
+    if std::env::var("BOINC_IDENTITY").is_ok() {
+        return Identity::load_or_generate(&Identity::default_path());
+    }
+    let mut h = DefaultHasher::new();
+    (role, addr, name).hash(&mut h);
+    let key = format!("{:016x}", h.finish());
+    let path: PathBuf = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".boinc-quota")
+        .join(format!("identity-{key}.json"));
+    Identity::load_or_generate(&path)
+}
+
 // ── Coordinator / Worker consensus nodes ────────────────────────────────────────
 
 /// Role of a node in the shared-ledger consensus mesh. Both roles are equal
@@ -712,7 +733,14 @@ async fn run_role_node(
 ) {
     let my_key = identity.public_key_bytes();
     let my_short = identity.public_key_short();
+    let my_enc_short = identity.encryption_pubkey_short();
     let my_addr = node_address(&my_key);
+    let _ = evt_tx
+        .send(AppEvent::Identity {
+            signing_short: my_short.clone(),
+            encryption_short: my_enc_short,
+        })
+        .await;
 
     let listener = match &listen_addr {
         Some(addr) => match TcpListener::bind(addr).await {

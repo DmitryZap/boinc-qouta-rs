@@ -168,6 +168,12 @@ pub enum AppEvent {
     Connected,
     Disconnected { reason: String },
     Registered { participant_id: ParticipantId },
+    /// The actual identity this node runs under (derived from the connection),
+    /// so the UI can show the real key rather than the on-disk default.
+    Identity {
+        signing_short: String,
+        encryption_short: String,
+    },
     StateUpdate(NetworkSnapshot),
     P2pUpdate(P2pSnapshot),
     ExecutorStarted,
