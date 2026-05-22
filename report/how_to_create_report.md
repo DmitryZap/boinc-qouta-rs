@@ -1,6 +1,0 @@
-[Очень хороший гайд по курсовым от Соколова](https://docs.google.com/document/d/1w3XqTB4O19BX9W_OLtUkteSZEV44yUFLUPdQgweHJ6U/edit?tab=t.0)
-
-[Пример оформления списка источников](https://docs.360.yandex.ru/docs/view?url=ya-disk-public%3A%2F%2FzEOIg%2FJNlOyb35jyOwgU3WvR14OukuXMa%2BEvA64pmuvrGd8yONq3FuQAGZGCRFnOlsg4VIaLrfRKbQetv4dueQ%3D%3D&name=%D0%9F%D1%80%D0%B8%D0%BC%D0%B5%D1%80%20%D0%BE%D1%84%D0%BE%D1%80%D0%BC%D0%BB%D0%B5%D0%BD%D0%B8%D1%8F%20%D1%81%D0%BF%D0%B8%D1%81%D0%BA%D0%B0%20%D0%B8%D1%81%D1%82%D0%BE%D1%87%D0%BD%D0%B8%D0%BA%D0%BE%D0%B2.pdf&nosw=1)
-[Строгая документация по оформлению списка источников](https://docs.360.yandex.ru/docs/view?url=ya-disk-public%3A%2F%2FzEOIg%2FJNlOyb35jyOwgU3Vh03NBf4ZTzFGdPPUkavQFaAnlfOPMdvy6vY1rTO6AwRmR%2F0fePyGwwW%2FWKW0%2FCEA%3D%3D&name=%D0%9C%D0%B5%D1%82%D0%BE%D0%B4%D0%B8%D1%87%D0%B5%D1%81%D0%BA%D0%B8%D0%B5%20%D1%83%D0%BA%D0%B0%D0%B7%D0%B0%D0%BD%D0%B8%D1%8F%20%D0%BF%D0%BE%20%D0%BE%D1%84%D0%BE%D1%80%D0%BC%D0%BB%D0%B5%D0%BD%D0%B8%D1%8E%20%D1%81%D0%BF%D0%B8%D1%81%D0%BA%D0%B0%20%D0%B8%D1%81%D0%BF%D0%BE%D0%BB%D1%8C%D0%B7%D0%BE%D0%B2%D0%B0%D0%BD%D0%BD%D1%8B%D1%85%20%D0%B8%D1%81%D1%82%D0%BE%D1%87%D0%BD%D0%B8%D0%BA%D0%BE%D0%B2.pdf&nosw=1)
-
-[Строгая документация по курсачам 2-3 курса](https://docs.google.com/document/d/1Mjhw5jVO1bv-XD1PrSyE2nhg8F-z1W9b/edit) 

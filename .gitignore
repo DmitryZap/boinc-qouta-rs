@@ -4,3 +4,6 @@
 
 # Bundled python-build-standalone (fetch via scripts/fetch-python.sh)
 /vendor/
+
+# Coursework report (kept locally only)
+/report/
