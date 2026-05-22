@@ -94,6 +94,12 @@ pub struct BoincApp {
     quick_demo_done: bool,
     quorum_input: String,
 
+    // P2P consensus mode
+    bootstrap_input: String,
+    send_to_input: String,
+    send_amount_input: String,
+    p2p: Option<P2pSnapshot>,
+
     // Identity
     my_public_key_short: String,
     my_encryption_pubkey_short: String,
@@ -146,6 +152,10 @@ impl BoincApp {
             exec_new_package_input: String::new(),
             quick_demo_done: false,
             quorum_input: "2".to_string(),
+            bootstrap_input: "127.0.0.1:7878".to_string(),
+            send_to_input: String::new(),
+            send_amount_input: "10".to_string(),
+            p2p: None,
             batch_range_start: "2".to_string(),
             batch_range_end: "10000".to_string(),
             batch_chunk_size: "1000".to_string(),
@@ -202,6 +212,22 @@ impl BoincApp {
                 AppEvent::StateUpdate(snap) => {
                     self.snapshot = snap;
                     self.decrypt_cache.clear();
+                }
+                AppEvent::P2pUpdate(snap) => {
+                    // Feed the replicated chain into the shared snapshot so the
+                    // Network tab renders it, and expose our own balance.
+                    self.snapshot.blocks = snap.blocks.clone();
+                    self.snapshot.block_count = snap.block_count;
+                    self.snapshot.blockchain_valid = snap.blockchain_valid;
+                    if let Some(id) = self.my_id {
+                        self.snapshot.participants = vec![ParticipantView {
+                            id,
+                            name: self.my_name.clone(),
+                            balance: snap.my_balance,
+                            reputation: 1,
+                        }];
+                    }
+                    self.p2p = Some(snap);
                 }
                 AppEvent::ExecutorStarted => {
                     self.executor_running = true;
@@ -347,6 +373,12 @@ impl eframe::App for BoincApp {
                                 Color32::from_rgba_unmultiplied(210, 153, 34, 40),
                                 C_WARNING,
                             ),
+                            NodeMode::Peer => status_badge(
+                                ui,
+                                "P2P Peer",
+                                Color32::from_rgba_unmultiplied(88, 166, 255, 40),
+                                ACCENT,
+                            ),
                         }
                     }
                     if let Some(id) = self.my_id {
@@ -394,6 +426,7 @@ impl eframe::App for BoincApp {
         let allowed: &[Tab] = match self.node_mode {
             NodeMode::Coordinator => &[Tab::Connect, Tab::Projects, Tab::Tasks, Tab::Network],
             NodeMode::Worker => &[Tab::Connect, Tab::Tasks, Tab::Executor, Tab::Network],
+            NodeMode::Peer => &[Tab::Connect, Tab::Network],
         };
         if !allowed.contains(&self.active_tab) {
             self.active_tab = Tab::Connect;
@@ -421,6 +454,10 @@ impl eframe::App for BoincApp {
                         (Tab::Executor, "Executor"),
                         (Tab::Packages, "Packages"),
                         (Tab::Network, "Network"),
+                    ],
+                    NodeMode::Peer => vec![
+                        (Tab::Connect, "Connect"),
+                        (Tab::Network, "Ledger"),
                     ],
                 };
                 ui.horizontal(|ui| {
@@ -516,6 +553,55 @@ impl eframe::App for BoincApp {
 // ── Tab implementations ───────────────────────────────────────────────────────
 impl BoincApp {
     // ── Connect tab ──────────────────────────────────────────────────────────
+    /// P2P-mode controls shown inside the Connection card: mesh stats, this
+    /// node's ledger address, and a token-transfer form.
+    fn draw_p2p_controls(&mut self, ui: &mut egui::Ui) {
+        if let Some(p) = self.p2p.clone() {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("Peers: {}", p.peers)).size(12.0).color(TEXT_SEC));
+                ui.label(RichText::new(format!("Validators: {}", p.validators)).size(12.0).color(TEXT_SEC));
+            });
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("Mempool: {}", p.mempool)).size(12.0).color(TEXT_SEC));
+                ui.label(RichText::new(format!("Blocks: {}", p.block_count)).size(12.0).color(TEXT_SEC));
+                let (txt, col) = if p.blockchain_valid {
+                    ("✓ chain valid", C_SUCCESS)
+                } else {
+                    ("✗ chain invalid", C_DANGER)
+                };
+                ui.label(RichText::new(txt).size(12.0).color(col));
+            });
+        }
+        if let Some(id) = self.my_id {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Your address:").size(11.0).color(TEXT_SEC));
+                ui.label(RichText::new(id.to_string()).size(11.0).color(ACCENT).monospace());
+            });
+        }
+        ui.add_space(8.0);
+        ui.label(RichText::new("Send tokens").size(12.0).color(TEXT_PRI).strong());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("To (addr):").size(11.0).color(TEXT_SEC));
+            ui.add_sized([180.0, 26.0], egui::TextEdit::singleline(&mut self.send_to_input));
+        });
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Amount:").size(11.0).color(TEXT_SEC));
+            ui.add_sized([100.0, 26.0], egui::TextEdit::singleline(&mut self.send_amount_input));
+        });
+        if ui.add_sized(
+            [ui.available_width(), 30.0],
+            Button::new(RichText::new("Submit transfer").color(BG_APP)).fill(ACCENT),
+        ).clicked() {
+            if let (Ok(to), Ok(amount)) = (
+                self.send_to_input.trim().parse::<u64>(),
+                self.send_amount_input.trim().parse::<u64>(),
+            ) {
+                self.send(AppCommand::SendTokens { to, amount });
+            }
+        }
+        ui.add_space(8.0);
+    }
+
     fn draw_connect_tab(&mut self, ui: &mut egui::Ui) {
         // Identity info always visible at top
         card_frame().show(ui, |ui| {
@@ -563,10 +649,17 @@ impl BoincApp {
                                 ui, "Worker",
                                 Color32::from_rgba_unmultiplied(210, 153, 34, 40), C_WARNING,
                             ),
+                            NodeMode::Peer => status_badge(
+                                ui, "P2P Peer",
+                                Color32::from_rgba_unmultiplied(88, 166, 255, 40), ACCENT,
+                            ),
                         }
                     });
                     ui.add_space(8.0);
-                    if !self.quick_demo_done {
+                    if self.node_mode == NodeMode::Peer {
+                        self.draw_p2p_controls(ui);
+                    }
+                    if self.node_mode != NodeMode::Peer && !self.quick_demo_done {
                         if ui.add_sized(
                             [ui.available_width(), 32.0],
                             Button::new(RichText::new("⚡ Quick Demo Setup").color(BG_APP)).fill(C_WARNING),
@@ -608,10 +701,20 @@ impl BoincApp {
                         NodeMode::Coordinator => {
                             ui.label(RichText::new("Listen address").size(11.0).color(TEXT_SEC));
                             ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut self.listen_addr));
+                            ui.add_space(4.0);
+                            ui.label(RichText::new("Peer coordinators (comma-separated, blank if first)").size(11.0).color(TEXT_SEC));
+                            ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut self.bootstrap_input));
                         }
                         NodeMode::Worker => {
                             ui.label(RichText::new("Coordinator address").size(11.0).color(TEXT_SEC));
                             ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut self.coord_addr));
+                        }
+                        NodeMode::Peer => {
+                            ui.label(RichText::new("Listen address").size(11.0).color(TEXT_SEC));
+                            ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut self.listen_addr));
+                            ui.add_space(4.0);
+                            ui.label(RichText::new("Bootstrap peers (comma-separated, blank for first node)").size(11.0).color(TEXT_SEC));
+                            ui.add_sized([ui.available_width(), 28.0], egui::TextEdit::singleline(&mut self.bootstrap_input));
                         }
                     }
                     if matches!(self.node_mode, NodeMode::Coordinator) {
@@ -636,11 +739,29 @@ impl BoincApp {
                             NodeMode::Coordinator => self.send(AppCommand::ConnectCoordinator {
                                 listen_addr: self.listen_addr.clone(),
                                 name: self.my_name.clone(), balance, quorum,
+                                peer_coordinators: self.bootstrap_input
+                                    .split(',')
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                                    .collect(),
                             }),
                             NodeMode::Worker => self.send(AppCommand::ConnectWorker {
                                 coord_addr: self.coord_addr.clone(),
                                 name: self.my_name.clone(), balance,
                             }),
+                            NodeMode::Peer => {
+                                let bootstrap_peers = self.bootstrap_input
+                                    .split(',')
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                                self.send(AppCommand::JoinP2P {
+                                    listen_addr: self.listen_addr.clone(),
+                                    bootstrap_peers,
+                                    name: self.my_name.clone(),
+                                    balance,
+                                });
+                            }
                         }
                     }
                 }
@@ -652,6 +773,7 @@ impl BoincApp {
                     let addr = match self.node_mode {
                         NodeMode::Coordinator => self.listen_addr.clone(),
                         NodeMode::Worker => self.coord_addr.clone(),
+                        NodeMode::Peer => self.listen_addr.clone(),
                     };
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Address:").color(TEXT_SEC).size(12.0));

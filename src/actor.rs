@@ -1,21 +1,24 @@
-use std::path::PathBuf;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex};
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 
-use crate::blockchain::Transaction;
+use crate::blockchain::{NodeKey, Transaction};
+use crate::consensus::{ConsensusEngine, ConsensusMsg};
 use crate::executor::Executor;
+use crate::identity::Identity;
 use crate::model::ParticipantId;
-use crate::network::{Network, NetworkConfig, NetworkError};
+use crate::network::Network;
+use crate::ops::LedgerOp;
 use crate::protocol::*;
 
-type TcpReader = FramedRead<tokio::net::tcp::OwnedReadHalf, LinesCodec>;
 type TcpWriter = FramedWrite<tokio::net::tcp::OwnedWriteHalf, LinesCodec>;
-type SharedReader = Arc<Mutex<TcpReader>>;
 type SharedWriter = Arc<Mutex<TcpWriter>>;
 
 pub struct NetworkActor {
@@ -35,15 +38,21 @@ impl NetworkActor {
                     listen_addr,
                     name,
                     balance,
-                    quorum,
+                    peer_coordinators,
+                    ..
                 } => {
-                    run_coordinator(
+                    // Coordinator: listens for workers/peer-coordinators and
+                    // relays consensus gossip. Bootstrap = other coordinators.
+                    let identity = Identity::load_or_generate(&Identity::default_path());
+                    run_role_node(
+                        NodeRole::Coordinator,
                         &mut self.cmd_rx,
                         &self.evt_tx,
-                        listen_addr,
+                        identity,
+                        Some(listen_addr),
+                        peer_coordinators,
                         name,
                         balance,
-                        quorum,
                     )
                     .await;
                 }
@@ -52,7 +61,35 @@ impl NetworkActor {
                     name,
                     balance,
                 } => {
-                    run_worker(&mut self.cmd_rx, &self.evt_tx, coord_addr, name, balance).await;
+                    // Worker: dials its coordinator; no listener (hub topology).
+                    let identity = Identity::load_or_generate(&Identity::default_path());
+                    run_role_node(
+                        NodeRole::Worker,
+                        &mut self.cmd_rx,
+                        &self.evt_tx,
+                        identity,
+                        None,
+                        vec![coord_addr],
+                        name,
+                        balance,
+                    )
+                    .await;
+                }
+                AppCommand::JoinP2P {
+                    listen_addr,
+                    bootstrap_peers,
+                    name,
+                    balance,
+                } => {
+                    run_p2p_node(
+                        &mut self.cmd_rx,
+                        &self.evt_tx,
+                        listen_addr,
+                        bootstrap_peers,
+                        name,
+                        balance,
+                    )
+                    .await;
                 }
                 _ => {}
             }
@@ -60,411 +97,6 @@ impl NetworkActor {
     }
 }
 
-// ── Coordinator mode ──────────────────────────────────────────────────────────
-
-async fn run_coordinator(
-    cmd_rx: &mut mpsc::Receiver<AppCommand>,
-    evt_tx: &mpsc::Sender<AppEvent>,
-    listen_addr: String,
-    name: String,
-    balance: u64,
-    quorum: u64,
-) {
-    let listener = match TcpListener::bind(&listen_addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            let _ = evt_tx
-                .send(AppEvent::Error(format!("Bind {listen_addr}: {e}")))
-                .await;
-            return;
-        }
-    };
-    let _ = evt_tx
-        .send(AppEvent::Log(format!("Listening on {listen_addr}")))
-        .await;
-
-    let config = NetworkConfig {
-        consensus_quorum: quorum.max(1),
-        ..NetworkConfig::default()
-    };
-    let mut initial_network =
-        load_coordinator_state().unwrap_or_else(|| Network::with_config(config));
-    initial_network.set_config(config);
-    let network = Arc::new(Mutex::new(initial_network));
-    let (broadcast_tx, _) = broadcast::channel::<String>(256);
-
-    let coordinator_identity =
-        crate::identity::Identity::load_or_generate(&crate::identity::Identity::default_path());
-    let coord_pubkey = coordinator_identity.public_key_bytes();
-    let coord_enc_pubkey = coordinator_identity.encryption_pubkey_bytes();
-    let my_id = {
-        let mut net = network.lock().await;
-        net.find_participant_by_pubkey(&coord_pubkey)
-            .unwrap_or_else(|| net.register_participant(name, balance, Some(coord_pubkey)))
-    };
-    persist_coordinator_state(&network, evt_tx).await;
-    let _ = evt_tx
-        .send(AppEvent::Log(format!(
-            "Identity: {}",
-            coordinator_identity.public_key_short()
-        )))
-        .await;
-    let _ = evt_tx.send(AppEvent::Connected).await;
-    let _ = evt_tx
-        .send(AppEvent::Registered {
-            participant_id: my_id,
-        })
-        .await;
-    send_state_update(evt_tx, &network).await;
-
-    let mut executor_stop: Option<tokio::task::JoinHandle<()>> = None;
-    let mut tick_timer = tokio::time::interval(Duration::from_secs(1));
-
-    loop {
-        tokio::select! {
-            _ = tick_timer.tick() => {
-                // Advance network clock so lease timeouts expire and abandoned
-                // tasks return to the Pending queue for new workers to pick up.
-                let prev_pending;
-                let new_pending;
-                {
-                    let mut net = network.lock().await;
-                    prev_pending = net.pending_count();
-                    net.tick(1);
-                    new_pending = net.pending_count();
-                }
-                if new_pending > prev_pending {
-                    let _ = evt_tx.send(AppEvent::Log(
-                        format!("Lease(s) expired: {} task(s) returned to queue", new_pending - prev_pending)
-                    )).await;
-                    broadcast_and_notify(&network, &broadcast_tx, evt_tx).await;
-                }
-            }
-            Some(cmd) = cmd_rx.recv() => {
-                match cmd {
-                    AppCommand::Disconnect => break,
-                    AppCommand::CreateProject { name, owner_encryption_pubkey } => {
-                        let pk = owner_encryption_pubkey.or(Some(coord_enc_pubkey));
-                        apply_local_change(
-                            &network,
-                            &broadcast_tx,
-                            evt_tx,
-                            |net| net.create_project(my_id, name, pk),
-                            |id| Some(AppEvent::Log(format!("Project #{id} created"))),
-                        ).await;
-                    }
-                    AppCommand::FundProject { project_id, amount } => {
-                        apply_local_change(
-                            &network,
-                            &broadcast_tx,
-                            evt_tx,
-                            |net| net.fund_project_from_owner(my_id, project_id, amount),
-                            |_| None,
-                        ).await;
-                    }
-                    AppCommand::DonateToProject { project_id, amount } => {
-                        apply_local_change(
-                            &network,
-                            &broadcast_tx,
-                            evt_tx,
-                            |net| net.donate_to_project(my_id, project_id, amount),
-                            |_| None,
-                        ).await;
-                    }
-                    AppCommand::SubmitTask { project_id, reward, payload } => {
-                        apply_local_change(
-                            &network,
-                            &broadcast_tx,
-                            evt_tx,
-                            |net| net.submit_task(my_id, project_id, reward, payload),
-                            |task_id| Some(AppEvent::Log(format!("Task #{task_id} submitted"))),
-                        ).await;
-                    }
-                    AppCommand::StartExecutor { reliability, compute_ticks, allowed_packages }
-                        if executor_stop.is_none() =>
-                    {
-                        let net_clone = Arc::clone(&network);
-                        let bcast = broadcast_tx.clone();
-                        let evt = evt_tx.clone();
-                        let handle = tokio::spawn(coordinator_executor_loop(
-                            my_id, reliability, compute_ticks, allowed_packages, net_clone, bcast, evt,
-                        ));
-                        executor_stop = Some(handle);
-                        let _ = evt_tx.send(AppEvent::ExecutorStarted).await;
-                        let _ = evt_tx.send(AppEvent::Log("Executor started".to_string())).await;
-                    }
-                    AppCommand::StopExecutor => {
-                        if let Some(handle) = executor_stop.take() {
-                            handle.abort();
-                            let _ = evt_tx.send(AppEvent::ExecutorStopped).await;
-                            let _ = evt_tx.send(AppEvent::Log("Executor stopped".to_string())).await;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Ok((stream, peer_addr)) = listener.accept() => {
-                let _ = evt_tx.send(AppEvent::Log(format!("Peer connected: {peer_addr}"))).await;
-                let net_clone = Arc::clone(&network);
-                let bcast = broadcast_tx.clone();
-                let evt = evt_tx.clone();
-                tokio::spawn(handle_peer(stream, net_clone, bcast, evt));
-            }
-        }
-    }
-
-    if let Some(handle) = executor_stop {
-        handle.abort();
-    }
-    let _ = evt_tx
-        .send(AppEvent::Disconnected {
-            reason: "stopped".to_string(),
-        })
-        .await;
-}
-
-async fn handle_peer(
-    stream: TcpStream,
-    network: Arc<Mutex<Network>>,
-    broadcast_tx: broadcast::Sender<String>,
-    evt_tx: mpsc::Sender<AppEvent>,
-) {
-    let (read_half, write_half) = stream.into_split();
-    let mut reader = FramedRead::new(read_half, LinesCodec::new());
-    let writer = Arc::new(Mutex::new(FramedWrite::new(write_half, LinesCodec::new())));
-
-    // Forward broadcast state updates to this peer
-    let writer_bcast = Arc::clone(&writer);
-    let mut bcast_rx = broadcast_tx.subscribe();
-    tokio::spawn(async move {
-        loop {
-            match bcast_rx.recv().await {
-                Ok(msg) => {
-                    let mut w = writer_bcast.lock().await;
-                    let _ = w.send(msg).await;
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-            }
-        }
-    });
-
-    let mut peer_id: Option<ParticipantId> = None;
-    let mut peer_nonce: Option<[u8; 32]> = None;
-
-    while let Some(line) = reader.next().await {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => break,
-        };
-        let request: PeerRequest = match serde_json::from_str(&line) {
-            Ok(r) => r,
-            Err(e) => {
-                let resp = PeerResponse::Error {
-                    msg: format!("parse error: {e}"),
-                };
-                send_response(&writer, resp).await;
-                continue;
-            }
-        };
-
-        let response = handle_peer_request(
-            request,
-            &network,
-            &broadcast_tx,
-            &evt_tx,
-            &mut peer_id,
-            &mut peer_nonce,
-        )
-        .await;
-        send_response(&writer, response).await;
-    }
-
-    let _ = evt_tx
-        .send(AppEvent::Log("Peer disconnected".to_string()))
-        .await;
-}
-
-async fn handle_peer_request(
-    req: PeerRequest,
-    network: &Arc<Mutex<Network>>,
-    broadcast_tx: &broadcast::Sender<String>,
-    evt_tx: &mpsc::Sender<AppEvent>,
-    peer_id: &mut Option<ParticipantId>,
-    peer_nonce: &mut Option<[u8; 32]>,
-) -> PeerResponse {
-    let mut net = network.lock().await;
-    match req {
-        PeerRequest::Hello {
-            name,
-            public_key,
-            initial_balance,
-        } => {
-            let participant_id = net
-                .find_participant_by_pubkey(&public_key)
-                .unwrap_or_else(|| {
-                    net.register_participant(name, initial_balance, Some(public_key))
-                });
-            *peer_id = Some(participant_id);
-
-            let mut nonce = [0u8; 32];
-            use rand::RngCore;
-            rand::rngs::OsRng.fill_bytes(&mut nonce);
-            *peer_nonce = Some(nonce);
-
-            PeerResponse::Challenge {
-                participant_id,
-                nonce,
-            }
-        }
-        PeerRequest::Auth {
-            public_key,
-            nonce_signature,
-        } => {
-            let Some(nonce) = peer_nonce.take() else {
-                return PeerResponse::Denied {
-                    reason: "no pending challenge".to_string(),
-                };
-            };
-            let Some(id) = *peer_id else {
-                return PeerResponse::Denied {
-                    reason: "hello not sent".to_string(),
-                };
-            };
-
-            if !crate::identity::Identity::verify(&public_key, &nonce, &nonce_signature) {
-                *peer_id = None;
-                return PeerResponse::Denied {
-                    reason: "invalid signature".to_string(),
-                };
-            }
-
-            let snap = build_snapshot(&net);
-            drop(net);
-            broadcast_snapshot(broadcast_tx, &snap);
-            PeerResponse::Welcome { participant_id: id }
-        }
-        PeerRequest::CreateProject {
-            name,
-            owner_encryption_pubkey,
-        } => {
-            let id = match registered_peer_id(peer_id) {
-                Ok(id) => id,
-                Err(resp) => return resp,
-            };
-            match net.create_project(id, name, owner_encryption_pubkey) {
-                Ok(project_id) => {
-                    publish_peer_state(&net, broadcast_tx, evt_tx);
-                    let _ = evt_tx
-                        .try_send(AppEvent::Log(format!("Peer created project #{project_id}")));
-                    PeerResponse::ProjectCreated { project_id }
-                }
-                Err(e) => PeerResponse::Error {
-                    msg: format!("{e:?}"),
-                },
-            }
-        }
-        PeerRequest::FundProject { project_id, amount } => {
-            let id = match registered_peer_id(peer_id) {
-                Ok(id) => id,
-                Err(resp) => return resp,
-            };
-            match net.fund_project_from_owner(id, project_id, amount) {
-                Ok(()) => {
-                    publish_peer_state(&net, broadcast_tx, evt_tx);
-                    PeerResponse::Ok
-                }
-                Err(e) => PeerResponse::Error {
-                    msg: format!("{e:?}"),
-                },
-            }
-        }
-        PeerRequest::DonateToProject { project_id, amount } => {
-            let id = match registered_peer_id(peer_id) {
-                Ok(id) => id,
-                Err(resp) => return resp,
-            };
-            match net.donate_to_project(id, project_id, amount) {
-                Ok(()) => {
-                    publish_peer_state(&net, broadcast_tx, evt_tx);
-                    PeerResponse::Ok
-                }
-                Err(e) => PeerResponse::Error {
-                    msg: format!("{e:?}"),
-                },
-            }
-        }
-        PeerRequest::SubmitTask {
-            project_id,
-            reward,
-            payload,
-        } => {
-            let id = match registered_peer_id(peer_id) {
-                Ok(id) => id,
-                Err(resp) => return resp,
-            };
-            match net.submit_task(id, project_id, reward, payload) {
-                Ok(task_id) => {
-                    publish_peer_state(&net, broadcast_tx, evt_tx);
-                    PeerResponse::TaskSubmitted { task_id }
-                }
-                Err(e) => PeerResponse::Error {
-                    msg: format!("{e:?}"),
-                },
-            }
-        }
-        PeerRequest::RequestTask { worker_id } => match net.request_task(worker_id) {
-            Ok(task) => {
-                let owner_encryption_pubkey = net
-                    .project(task.project_id)
-                    .and_then(|p| p.owner_encryption_pubkey);
-                publish_peer_state(&net, broadcast_tx, evt_tx);
-                PeerResponse::TaskAssigned {
-                    task_id: task.id,
-                    project_id: task.project_id,
-                    reward: task.reward,
-                    payload: task.payload,
-                    owner_encryption_pubkey,
-                }
-            }
-            Err(NetworkError::NoPendingTasks) => PeerResponse::NoPendingTasks,
-            Err(e) => PeerResponse::Error {
-                msg: format!("{e:?}"),
-            },
-        },
-        PeerRequest::SubmitResult {
-            worker_id,
-            task_id,
-            result_digest,
-            actual_cost,
-            encrypted_result,
-        } => match net.submit_result(
-            worker_id,
-            task_id,
-            result_digest,
-            actual_cost,
-            encrypted_result,
-        ) {
-            Ok(consensus) => {
-                publish_peer_state(&net, broadcast_tx, evt_tx);
-                PeerResponse::ResultAck { consensus }
-            }
-            Err(e) => PeerResponse::Error {
-                msg: format!("{e:?}"),
-            },
-        },
-        PeerRequest::Heartbeat { worker_id, task_id } => match net.heartbeat(worker_id, task_id) {
-            Ok(()) => PeerResponse::Ok,
-            Err(e) => PeerResponse::Error {
-                msg: format!("{e:?}"),
-            },
-        },
-        PeerRequest::GetState => {
-            let snap = build_snapshot(&net);
-            PeerResponse::StateUpdate(snap)
-        }
-    }
-}
 
 /// Auto-install missing allowlist packages into the venv before the executor
 /// runs, logging each install/failure. Stdlib and already-present modules are
@@ -504,380 +136,6 @@ async fn ensure_packages(packages: &[String], evt_tx: &mpsc::Sender<AppEvent>) {
         };
         let _ = evt_tx.send(AppEvent::Log(msg)).await;
     }
-}
-
-async fn coordinator_executor_loop(
-    worker_id: ParticipantId,
-    reliability: u8,
-    compute_ticks: u64,
-    allowed_packages: Vec<String>,
-    network: Arc<Mutex<Network>>,
-    broadcast_tx: broadcast::Sender<String>,
-    evt_tx: mpsc::Sender<AppEvent>,
-) {
-    ensure_packages(&allowed_packages, &evt_tx).await;
-    let executor = Executor::new(
-        worker_id,
-        "local-executor",
-        reliability,
-        compute_ticks.max(1),
-        1,
-        allowed_packages,
-    );
-    loop {
-        let result = {
-            let net_clone = Arc::clone(&network);
-            let exec_clone = executor.clone();
-            tokio::task::spawn_blocking(move || {
-                let mut net = net_clone.blocking_lock();
-                exec_clone.process_next_task(&mut net)
-            })
-            .await
-        };
-
-        match result {
-            Ok(Ok(crate::executor::ExecutorEvent::Idle)) => {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-            Ok(Ok(crate::executor::ExecutorEvent::ProcessedTask {
-                task_id,
-                consensus_reached,
-                reward,
-                ..
-            })) => {
-                let msg = format!("Task #{task_id}: reward={reward} consensus={consensus_reached}");
-                let _ = evt_tx.send(AppEvent::Log(msg)).await;
-                let snap = build_snapshot(&*network.lock().await);
-                persist_coordinator_state(&network, &evt_tx).await;
-                broadcast_snapshot(&broadcast_tx, &snap);
-                let _ = evt_tx.send(AppEvent::StateUpdate(snap)).await;
-            }
-            Ok(Err(e)) => {
-                let _ = evt_tx
-                    .send(AppEvent::Error(format!("Executor: {e:?}")))
-                    .await;
-                tokio::time::sleep(Duration::from_millis(200)).await;
-            }
-            Err(_) => break,
-        }
-    }
-}
-
-// ── Worker mode ───────────────────────────────────────────────────────────────
-
-async fn run_worker(
-    cmd_rx: &mut mpsc::Receiver<AppCommand>,
-    evt_tx: &mpsc::Sender<AppEvent>,
-    coord_addr: String,
-    name: String,
-    balance: u64,
-) {
-    let stream = match TcpStream::connect(&coord_addr).await {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = evt_tx
-                .send(AppEvent::Error(format!("Connect {coord_addr}: {e}")))
-                .await;
-            return;
-        }
-    };
-    let _ = evt_tx
-        .send(AppEvent::Log(format!("Connected to {coord_addr}")))
-        .await;
-
-    let (read_half, write_half) = stream.into_split();
-    let reader = Arc::new(Mutex::new(FramedRead::new(read_half, LinesCodec::new())));
-    let writer = Arc::new(Mutex::new(FramedWrite::new(write_half, LinesCodec::new())));
-
-    // Load identity and perform Hello/Auth handshake
-    let identity =
-        crate::identity::Identity::load_or_generate(&crate::identity::Identity::default_path());
-    let public_key = identity.public_key_bytes();
-    let my_encryption_pubkey = identity.encryption_pubkey_bytes();
-    let _ = evt_tx
-        .send(AppEvent::Log(format!(
-            "Identity: {}",
-            identity.public_key_short()
-        )))
-        .await;
-
-    // Send Hello
-    let req = PeerRequest::Hello {
-        name,
-        public_key,
-        initial_balance: balance,
-    };
-    if let Err(e) = send_request(&writer, &req).await {
-        let _ = evt_tx
-            .send(AppEvent::Error(format!("Hello send: {e}")))
-            .await;
-        return;
-    }
-
-    // Receive Challenge
-    let (participant_id, nonce) = match recv_response(&reader).await {
-        Some(PeerResponse::Challenge {
-            participant_id,
-            nonce,
-        }) => (participant_id, nonce),
-        Some(PeerResponse::Error { msg }) => {
-            let _ = evt_tx.send(AppEvent::Error(msg)).await;
-            return;
-        }
-        _ => {
-            let _ = evt_tx
-                .send(AppEvent::Error("unexpected hello response".to_string()))
-                .await;
-            return;
-        }
-    };
-
-    // Sign and send Auth
-    let signature = identity.sign_nonce(&nonce);
-    let req = PeerRequest::Auth {
-        public_key,
-        nonce_signature: signature,
-    };
-    if let Err(e) = send_request(&writer, &req).await {
-        let _ = evt_tx
-            .send(AppEvent::Error(format!("Auth send: {e}")))
-            .await;
-        return;
-    }
-
-    // Receive Welcome
-    let my_id = match recv_response(&reader).await {
-        Some(PeerResponse::Welcome { participant_id: id }) => {
-            // Confirm the server assigned us the same id as announced in Challenge
-            let _ = id; // use whichever the server confirmed
-            let _ = evt_tx.send(AppEvent::Connected).await;
-            let _ = evt_tx.send(AppEvent::Registered { participant_id }).await;
-            participant_id
-        }
-        Some(PeerResponse::Denied { reason }) => {
-            let _ = evt_tx
-                .send(AppEvent::Error(format!("Auth denied: {reason}")))
-                .await;
-            return;
-        }
-        Some(PeerResponse::Error { msg }) => {
-            let _ = evt_tx.send(AppEvent::Error(msg)).await;
-            return;
-        }
-        _ => {
-            let _ = evt_tx
-                .send(AppEvent::Error("unexpected auth response".to_string()))
-                .await;
-            return;
-        }
-    };
-
-    let _ = send_request(&writer, &PeerRequest::GetState).await;
-    if let Some(PeerResponse::StateUpdate(snap)) = recv_response(&reader).await {
-        let _ = evt_tx.send(AppEvent::StateUpdate(snap)).await;
-    }
-
-    let mut executor_handle: Option<tokio::task::JoinHandle<()>> = {
-        let w = Arc::clone(&writer);
-        let r = Arc::clone(&reader);
-        let e = evt_tx.clone();
-        let handle = tokio::spawn(worker_executor_loop(
-            my_id,
-            95,
-            2,
-            crate::sandbox::default_allowed_packages(),
-            w,
-            r,
-            e,
-        ));
-        let _ = evt_tx.send(AppEvent::ExecutorStarted).await;
-        let _ = evt_tx
-            .send(AppEvent::Log("Worker executor started".to_string()))
-            .await;
-        Some(handle)
-    };
-
-    loop {
-        tokio::select! {
-            Some(cmd) = cmd_rx.recv() => {
-                match cmd {
-                    AppCommand::Disconnect => break,
-                    AppCommand::CreateProject { name, owner_encryption_pubkey } => {
-                        let pk = owner_encryption_pubkey.or(Some(my_encryption_pubkey));
-                        worker_send_recv(&writer, &reader, evt_tx,
-                            PeerRequest::CreateProject { name, owner_encryption_pubkey: pk },
-                        ).await;
-                        request_state_update(&writer, &reader, evt_tx).await;
-                    }
-                    AppCommand::FundProject { project_id, amount } => {
-                        worker_send_recv(&writer, &reader, evt_tx,
-                            PeerRequest::FundProject { project_id, amount },
-                        ).await;
-                        request_state_update(&writer, &reader, evt_tx).await;
-                    }
-                    AppCommand::DonateToProject { project_id, amount } => {
-                        worker_send_recv(&writer, &reader, evt_tx,
-                            PeerRequest::DonateToProject { project_id, amount },
-                        ).await;
-                        request_state_update(&writer, &reader, evt_tx).await;
-                    }
-                    AppCommand::SubmitTask { project_id, reward, payload } => {
-                        worker_send_recv(&writer, &reader, evt_tx,
-                            PeerRequest::SubmitTask { project_id, reward, payload },
-                        ).await;
-                        request_state_update(&writer, &reader, evt_tx).await;
-                    }
-                    AppCommand::StartExecutor { reliability, compute_ticks, allowed_packages }
-                        if executor_handle.is_none() =>
-                    {
-                        let w = Arc::clone(&writer);
-                        let r = Arc::clone(&reader);
-                        let e = evt_tx.clone();
-                        let handle = tokio::spawn(worker_executor_loop(
-                            my_id, reliability, compute_ticks, allowed_packages, w, r, e,
-                        ));
-                        executor_handle = Some(handle);
-                        let _ = evt_tx.send(AppEvent::ExecutorStarted).await;
-                        let _ = evt_tx.send(AppEvent::Log("Worker executor started".to_string())).await;
-                    }
-                    AppCommand::StopExecutor => {
-                        if let Some(h) = executor_handle.take() {
-                            h.abort();
-                            let _ = evt_tx.send(AppEvent::ExecutorStopped).await;
-                            let _ = evt_tx.send(AppEvent::Log("Worker executor stopped".to_string())).await;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            // Poll incoming messages (state updates pushed by coordinator)
-            _ = tokio::time::sleep(Duration::from_millis(200)) => {
-                if let Ok(mut r) = reader.try_lock() {
-                    while let Ok(Some(line)) = tokio::time::timeout(
-                        Duration::from_millis(10), r.next()
-                    ).await {
-                        if let Ok(line) = line {
-                            if let Ok(PeerResponse::StateUpdate(snap)) = serde_json::from_str(&line) {
-                                let _ = evt_tx.send(AppEvent::StateUpdate(snap)).await;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if let Some(h) = executor_handle {
-        h.abort();
-    }
-    let _ = evt_tx.send(AppEvent::ExecutorStopped).await;
-    let _ = evt_tx
-        .send(AppEvent::Disconnected {
-            reason: "disconnected".to_string(),
-        })
-        .await;
-}
-
-async fn worker_executor_loop(
-    worker_id: ParticipantId,
-    reliability: u8,
-    compute_ticks: u64,
-    allowed_packages: Vec<String>,
-    writer: SharedWriter,
-    reader: SharedReader,
-    evt_tx: mpsc::Sender<AppEvent>,
-) {
-    ensure_packages(&allowed_packages, &evt_tx).await;
-    let executor = Executor::new(worker_id, "worker-executor", reliability, 1, 1, allowed_packages);
-    loop {
-        // Request a task
-        let _ = send_request(&writer, &PeerRequest::RequestTask { worker_id }).await;
-        let task = match recv_response(&reader).await {
-            Some(PeerResponse::TaskAssigned {
-                task_id,
-                project_id,
-                reward,
-                payload,
-                owner_encryption_pubkey,
-            }) => (
-                task_id,
-                project_id,
-                reward,
-                payload,
-                owner_encryption_pubkey,
-            ),
-            Some(PeerResponse::NoPendingTasks) => {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                continue;
-            }
-            _ => {
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                continue;
-            }
-        };
-
-        let (task_id, _project_id, reward, payload, owner_enc_pk) = task;
-
-        // Simulate compute time
-        let delay = compute_ticks.max(1) * 100;
-        tokio::time::sleep(Duration::from_millis(delay)).await;
-
-        // Compute digest + stdout, then encrypt stdout for project owner (if pubkey provided).
-        let (computed, actual_cost) = executor.execute_task_payload(task_id, &payload, reward);
-        let result_digest = computed.digest.clone();
-        let encrypted_result = owner_enc_pk
-            .map(|pk| crate::identity::Identity::encrypt_for(&pk, computed.stdout.as_bytes()));
-        let _ = send_request(
-            &writer,
-            &PeerRequest::SubmitResult {
-                worker_id,
-                task_id,
-                result_digest: result_digest.clone(),
-                actual_cost,
-                encrypted_result,
-            },
-        )
-        .await;
-
-        match recv_response(&reader).await {
-            Some(PeerResponse::ResultAck { consensus }) => {
-                let _ = evt_tx
-                    .send(AppEvent::Log(format!(
-                        "Task #{task_id} result={result_digest} consensus={consensus}"
-                    )))
-                    .await;
-                // Request fresh state so worker UI balance updates immediately
-                let _ = send_request(&writer, &PeerRequest::GetState).await;
-                if let Some(PeerResponse::StateUpdate(snap)) = recv_response(&reader).await {
-                    let _ = evt_tx.send(AppEvent::StateUpdate(snap)).await;
-                }
-            }
-            Some(PeerResponse::StateUpdate(snap)) => {
-                let _ = evt_tx.send(AppEvent::StateUpdate(snap)).await;
-            }
-            _ => {}
-        }
-    }
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn registered_peer_id(peer_id: &Option<ParticipantId>) -> Result<ParticipantId, PeerResponse> {
-    (*peer_id).ok_or_else(|| PeerResponse::Error {
-        msg: "not registered".to_string(),
-    })
-}
-
-fn publish_peer_state(
-    network: &Network,
-    broadcast_tx: &broadcast::Sender<String>,
-    evt_tx: &mpsc::Sender<AppEvent>,
-) -> NetworkSnapshot {
-    save_coordinator_state_ref(network);
-    let snap = build_snapshot(network);
-    broadcast_snapshot(broadcast_tx, &snap);
-    let _ = evt_tx.try_send(AppEvent::StateUpdate(snap.clone()));
-    snap
 }
 
 pub fn build_snapshot(net: &Network) -> NetworkSnapshot {
@@ -990,152 +248,973 @@ fn transaction_view(tx: &Transaction) -> TransactionView {
     }
 }
 
-async fn send_state_update(evt_tx: &mpsc::Sender<AppEvent>, network: &Arc<Mutex<Network>>) {
-    let snap = build_snapshot(&*network.lock().await);
-    let _ = evt_tx.send(AppEvent::StateUpdate(snap)).await;
+// ── P2P consensus mesh ──────────────────────────────────────────────────────────
+
+/// Live writers to connected peers, keyed by their advertised listen address.
+type PeerMap = Arc<Mutex<HashMap<String, SharedWriter>>>;
+/// Hashes of consensus messages already processed, to break gossip loops.
+type SeenSet = Arc<Mutex<HashSet<u64>>>;
+
+/// Derive a u64 ledger account address from a node's Ed25519 public key.
+pub fn node_address(key: &NodeKey) -> ParticipantId {
+    u64::from_le_bytes(key[..8].try_into().unwrap())
 }
 
-async fn apply_local_change<T>(
-    network: &Arc<Mutex<Network>>,
-    broadcast_tx: &broadcast::Sender<String>,
-    evt_tx: &mpsc::Sender<AppEvent>,
-    operation: impl FnOnce(&mut Network) -> Result<T, NetworkError>,
-    success_event: impl FnOnce(T) -> Option<AppEvent>,
-) {
-    let result = {
-        let mut net = network.lock().await;
-        operation(&mut net)
+fn msg_hash(msg: &ConsensusMsg) -> u64 {
+    let mut h = DefaultHasher::new();
+    serde_json::to_string(msg).unwrap_or_default().hash(&mut h);
+    h.finish()
+}
+
+async fn send_p2p(writer: &SharedWriter, msg: &P2pMessage) {
+    if let Ok(line) = serde_json::to_string(msg) {
+        let mut w = writer.lock().await;
+        let _ = w.send(line).await;
+    }
+}
+
+/// Send one envelope to every peer except `exclude` (the sender we relay from).
+async fn flood_envelope(peers: &PeerMap, exclude: Option<&str>, env: &P2pMessage) {
+    let line = match serde_json::to_string(env) {
+        Ok(l) => l,
+        Err(_) => return,
     };
-
-    match result {
-        Ok(value) => {
-            if let Some(event) = success_event(value) {
-                let _ = evt_tx.send(event).await;
-            }
-            broadcast_and_notify(network, broadcast_tx, evt_tx).await;
+    let map = peers.lock().await;
+    for (addr, writer) in map.iter() {
+        if Some(addr.as_str()) == exclude {
+            continue;
         }
-        Err(err) => {
-            let _ = evt_tx.send(AppEvent::Error(format!("{err:?}"))).await;
-        }
+        let mut w = writer.lock().await;
+        let _ = w.send(line.clone()).await;
     }
 }
 
-fn coordinator_state_path() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("boinc-quota")
-        .join("coordinator-state.json")
-}
-
-fn load_coordinator_state() -> Option<Network> {
-    let path = coordinator_state_path();
-    let bytes = std::fs::read(&path).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-fn save_coordinator_state_ref(network: &Network) {
-    let path = coordinator_state_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(bytes) = serde_json::to_vec_pretty(network) {
-        let _ = std::fs::write(path, bytes);
+/// Flood consensus messages this node originated; record their hashes as seen so
+/// they are ignored when peers relay them back.
+async fn flood_consensus(
+    peers: &PeerMap,
+    seen: &SeenSet,
+    exclude: Option<&str>,
+    msgs: Vec<ConsensusMsg>,
+) {
+    for msg in msgs {
+        seen.lock().await.insert(msg_hash(&msg));
+        flood_envelope(peers, exclude, &P2pMessage::Consensus(msg)).await;
     }
 }
 
-async fn persist_coordinator_state(network: &Arc<Mutex<Network>>, evt_tx: &mpsc::Sender<AppEvent>) {
-    let net = network.lock().await;
-    let path = coordinator_state_path();
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            let _ = evt_tx
-                .send(AppEvent::Error(format!("Persist state: {e}")))
-                .await;
-            return;
-        }
+fn block_to_view(b: &crate::blockchain::Block) -> BlockView {
+    BlockView {
+        index: b.index,
+        tick: b.tick,
+        hash: hex::encode(b.hash),
+        prev_hash: hex::encode(b.prev_hash),
+        transactions: b.transactions.iter().map(transaction_view).collect(),
     }
-    match serde_json::to_vec_pretty(&*net) {
-        Ok(bytes) => {
-            if let Err(e) = std::fs::write(&path, bytes) {
+}
+
+async fn build_p2p_snapshot(
+    engine: &Arc<Mutex<ConsensusEngine>>,
+    peers: &PeerMap,
+    my_addr: ParticipantId,
+    node_key_short: &str,
+) -> P2pSnapshot {
+    let peer_count = peers.lock().await.len();
+    let e = engine.lock().await;
+    // Render the replica's internal economic ledger (token transactions) for the
+    // UI; the consensus op-log drives it but the economy view stays the same.
+    let econ = e.state().blockchain();
+    P2pSnapshot {
+        node_key_short: node_key_short.to_string(),
+        peers: peer_count,
+        validators: e.validator_count(),
+        mempool: e.mempool().len(),
+        block_count: e.block_count(),
+        blockchain_valid: econ.verify_integrity(),
+        my_balance: econ.balance_of(my_addr),
+        blocks: econ.blocks().iter().map(block_to_view).collect(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_dial(
+    addr: String,
+    my_key: NodeKey,
+    my_listen: String,
+    my_name: String,
+    engine: Arc<Mutex<ConsensusEngine>>,
+    peers: PeerMap,
+    seen: SeenSet,
+    evt_tx: mpsc::Sender<AppEvent>,
+) {
+    tokio::spawn(async move {
+        match TcpStream::connect(&addr).await {
+            Ok(stream) => {
                 let _ = evt_tx
-                    .send(AppEvent::Error(format!("Persist state: {e}")))
+                    .send(AppEvent::Log(format!("Dialed peer {addr}")))
+                    .await;
+                p2p_connection(stream, my_key, my_listen, my_name, engine, peers, seen, evt_tx)
+                    .await;
+            }
+            Err(e) => {
+                let _ = evt_tx
+                    .send(AppEvent::Log(format!("Dial {addr} failed: {e}")))
                     .await;
             }
         }
+    });
+}
+
+/// Drive one peer connection (inbound-accepted or outbound-dialed, symmetric).
+/// Peers are keyed by node pubkey (unique), so multiple workers that don't run
+/// a listener never collide. There is no peer auto-discovery: the topology is
+/// exactly the configured links (workers→coordinator, coordinator↔coordinator),
+/// and the coordinator relays gossip between its links — the hub model.
+#[allow(clippy::too_many_arguments)]
+async fn p2p_connection(
+    stream: TcpStream,
+    my_key: NodeKey,
+    my_listen: String,
+    my_name: String,
+    engine: Arc<Mutex<ConsensusEngine>>,
+    peers: PeerMap,
+    seen: SeenSet,
+    evt_tx: mpsc::Sender<AppEvent>,
+) {
+    let (read_half, write_half) = stream.into_split();
+    let mut reader = FramedRead::new(read_half, LinesCodec::new());
+    let writer = Arc::new(Mutex::new(FramedWrite::new(write_half, LinesCodec::new())));
+
+    // Announce ourselves immediately.
+    send_p2p(
+        &writer,
+        &P2pMessage::Hello {
+            node_key: my_key,
+            listen_addr: my_listen.clone(),
+            name: my_name.clone(),
+        },
+    )
+    .await;
+
+    let mut peer_key: Option<String> = None;
+
+    while let Some(line) = reader.next().await {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        let msg: P2pMessage = match serde_json::from_str(&line) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        match msg {
+            P2pMessage::Hello { node_key, .. } => {
+                let key = hex::encode(node_key);
+                peer_key = Some(key.clone());
+                peers.lock().await.insert(key, Arc::clone(&writer));
+
+                // Learn the new peer, and tell it every validator we already know
+                // so it converges on the full set without needing direct links to
+                // everyone (hub topology). Then propagate the new peer's key to
+                // our other links so they learn it too.
+                let known = {
+                    let mut e = engine.lock().await;
+                    e.add_validator(node_key);
+                    e.validators()
+                };
+                for v in known {
+                    send_p2p(&writer, &P2pMessage::Validator(v)).await;
+                }
+                flood_envelope(&peers, peer_key.as_deref(), &P2pMessage::Validator(node_key)).await;
+
+                // Bring this peer up to date, and hand over our pending ops so
+                // every node's mempool converges (a height's fixed proposer must
+                // hold the ops to make progress).
+                let (from, pending) = {
+                    let e = engine.lock().await;
+                    (e.next_index(), e.mempool().to_vec())
+                };
+                send_p2p(
+                    &writer,
+                    &P2pMessage::Consensus(ConsensusMsg::SyncRequest { from_height: from }),
+                )
+                .await;
+                for op in pending {
+                    send_p2p(&writer, &P2pMessage::Consensus(ConsensusMsg::Op(op))).await;
+                }
+            }
+            P2pMessage::Validator(key) => {
+                // Dedup membership gossip by the key bytes, then relay onward.
+                let mut h = DefaultHasher::new();
+                key.hash(&mut h);
+                let fresh = seen.lock().await.insert(h.finish());
+                if fresh {
+                    engine.lock().await.add_validator(key);
+                    flood_envelope(&peers, peer_key.as_deref(), &P2pMessage::Validator(key)).await;
+                }
+            }
+            P2pMessage::Peers(_) => { /* no auto-discovery: explicit links only */ }
+            P2pMessage::Consensus(cmsg) => {
+                let dedup = matches!(
+                    cmsg,
+                    ConsensusMsg::Op(_)
+                        | ConsensusMsg::Propose(_)
+                        | ConsensusMsg::Vote { .. }
+                        | ConsensusMsg::Committed(_)
+                );
+                if dedup {
+                    let fresh = seen.lock().await.insert(msg_hash(&cmsg));
+                    if !fresh {
+                        continue;
+                    }
+                    // Relay onward (flood) to our other links, skipping the sender.
+                    flood_envelope(
+                        &peers,
+                        peer_key.as_deref(),
+                        &P2pMessage::Consensus(cmsg.clone()),
+                    )
+                    .await;
+                }
+
+                let produced = engine.lock().await.on_message(cmsg);
+                for m in produced {
+                    match m {
+                        ConsensusMsg::SyncResponse { .. } => {
+                            send_p2p(&writer, &P2pMessage::Consensus(m)).await;
+                        }
+                        other => {
+                            flood_consensus(&peers, &seen, None, vec![other]).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(key) = peer_key {
+        peers.lock().await.remove(&key);
+    }
+    let _ = evt_tx
+        .send(AppEvent::Log("Peer connection closed".to_string()))
+        .await;
+}
+
+async fn run_p2p_node(
+    cmd_rx: &mut mpsc::Receiver<AppCommand>,
+    evt_tx: &mpsc::Sender<AppEvent>,
+    listen_addr: String,
+    bootstrap_peers: Vec<String>,
+    name: String,
+    balance: u64,
+) {
+    let identity = Identity::load_or_generate(&Identity::default_path());
+    p2p_node_with_identity(
+        cmd_rx,
+        evt_tx,
+        identity,
+        listen_addr,
+        bootstrap_peers,
+        name,
+        balance,
+    )
+    .await;
+}
+
+/// Run a P2P consensus node with an explicit identity. Used by the dispatcher
+/// (which supplies the on-disk identity) and by multi-node smoke tests / the
+/// `consensus_smoke` binary (which inject distinct generated identities).
+#[allow(clippy::too_many_arguments)]
+pub async fn p2p_node_with_identity(
+    cmd_rx: &mut mpsc::Receiver<AppCommand>,
+    evt_tx: &mpsc::Sender<AppEvent>,
+    identity: Identity,
+    listen_addr: String,
+    bootstrap_peers: Vec<String>,
+    name: String,
+    balance: u64,
+) {
+    let my_key = identity.public_key_bytes();
+    let my_short = identity.public_key_short();
+    let my_addr = node_address(&my_key);
+
+    let listener = match TcpListener::bind(&listen_addr).await {
+        Ok(l) => l,
         Err(e) => {
             let _ = evt_tx
-                .send(AppEvent::Error(format!("Persist state: {e}")))
+                .send(AppEvent::Error(format!("Bind {listen_addr}: {e}")))
                 .await;
+            return;
+        }
+    };
+    let _ = evt_tx
+        .send(AppEvent::Log(format!("P2P node listening on {listen_addr}")))
+        .await;
+    let _ = evt_tx
+        .send(AppEvent::Log(format!("Identity: {my_short}")))
+        .await;
+
+    let engine = Arc::new(Mutex::new(ConsensusEngine::new(identity, [])));
+    let peers: PeerMap = Arc::new(Mutex::new(HashMap::new()));
+    let seen: SeenSet = Arc::new(Mutex::new(HashSet::new()));
+
+    let _ = evt_tx.send(AppEvent::Connected).await;
+    let _ = evt_tx
+        .send(AppEvent::Registered {
+            participant_id: my_addr,
+        })
+        .await;
+
+    // Register ourselves (and mint our initial balance) into the replicated
+    // ledger via a consensus operation.
+    {
+        let out = engine
+            .lock()
+            .await
+            .submit_local_op(LedgerOp::RegisterParticipant {
+                id: my_addr,
+                name: name.clone(),
+                public_key: my_key,
+                initial_balance: balance,
+            });
+        flood_consensus(&peers, &seen, None, out).await;
+    }
+
+    // Dial bootstrap peers to bootstrap the mesh.
+    for addr in bootstrap_peers {
+        if addr.trim().is_empty() {
+            continue;
+        }
+        spawn_dial(
+            addr.trim().to_string(),
+            my_key,
+            listen_addr.clone(),
+            name.clone(),
+            Arc::clone(&engine),
+            Arc::clone(&peers),
+            Arc::clone(&seen),
+            evt_tx.clone(),
+        );
+    }
+
+    let mut tick: u64 = 0;
+    let mut round = tokio::time::interval(Duration::from_millis(500));
+    let mut sync_timer = tokio::time::interval(Duration::from_secs(3));
+    // Grace period before we start proposing: lets the mesh form and every node
+    // converge on the same validator set, so the deterministic round-robin
+    // proposer is agreed by all. Proposing earlier risks two nodes (with
+    // partial validator views) sealing competing blocks at the same height.
+    let started = std::time::Instant::now();
+    const PROPOSE_GRACE: Duration = Duration::from_millis(2500);
+
+    loop {
+        tokio::select! {
+            _ = round.tick() => {
+                tick += 1;
+                let _ = tick;
+                let out = {
+                    let mut e = engine.lock().await;
+                    if started.elapsed() >= PROPOSE_GRACE {
+                        e.try_propose()
+                    } else {
+                        vec![]
+                    }
+                };
+                flood_consensus(&peers, &seen, None, out).await;
+                let snap = build_p2p_snapshot(&engine, &peers, my_addr, &my_short).await;
+                let _ = evt_tx.send(AppEvent::P2pUpdate(snap)).await;
+            }
+            _ = sync_timer.tick() => {
+                let (from, pending) = {
+                    let e = engine.lock().await;
+                    (e.next_index(), e.mempool().to_vec())
+                };
+                let mut msgs = vec![ConsensusMsg::SyncRequest { from_height: from }];
+                msgs.extend(pending.into_iter().map(ConsensusMsg::Op));
+                // Re-flood mempool + sync request so nodes that missed earlier
+                // gossip (e.g. mints sent before the mesh formed) still converge.
+                flood_consensus(&peers, &seen, None, msgs).await;
+            }
+            Some(cmd) = cmd_rx.recv() => {
+                match cmd {
+                    AppCommand::Disconnect => break,
+                    AppCommand::SendTokens { to, amount } => {
+                        let out = engine.lock().await.submit_local_op(LedgerOp::Transfer {
+                            from: my_addr,
+                            to,
+                            amount,
+                            memo: "p2p-transfer".to_string(),
+                        });
+                        flood_consensus(&peers, &seen, None, out).await;
+                        let _ = evt_tx.send(AppEvent::Log(
+                            format!("Queued transfer {amount} → #{to}")
+                        )).await;
+                    }
+                    _ => {}
+                }
+            }
+            Ok((stream, peer_addr)) = listener.accept() => {
+                let _ = evt_tx.send(AppEvent::Log(
+                    format!("Peer connected: {peer_addr}")
+                )).await;
+                tokio::spawn(p2p_connection(
+                    stream, my_key, listen_addr.clone(), name.clone(),
+                    Arc::clone(&engine), Arc::clone(&peers), Arc::clone(&seen), evt_tx.clone(),
+                ));
+            }
+        }
+    }
+
+    let _ = evt_tx
+        .send(AppEvent::Disconnected {
+            reason: "left mesh".to_string(),
+        })
+        .await;
+}
+
+// ── Coordinator / Worker consensus nodes ────────────────────────────────────────
+
+/// Role of a node in the shared-ledger consensus mesh. Both roles are equal
+/// validators; the role only governs task behaviour and transport shape.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum NodeRole {
+    /// Listens for workers/peer-coordinators and relays gossip; drives the clock.
+    Coordinator,
+    /// Dials a coordinator; runs the executor that claims and computes tasks.
+    Worker,
+}
+
+async fn submit_and_flood(
+    engine: &Arc<Mutex<ConsensusEngine>>,
+    peers: &PeerMap,
+    seen: &SeenSet,
+    op: LedgerOp,
+) {
+    let out = engine.lock().await.submit_local_op(op);
+    flood_consensus(peers, seen, None, out).await;
+}
+
+/// Run a coordinator or worker node. Every node holds a `ConsensusEngine` with a
+/// `Network` replica; all economic and task actions become [`LedgerOp`]s that are
+/// gossiped, BFT-voted, and applied identically everywhere. Coordinators listen
+/// and relay; workers dial a coordinator. The coordinator emits `Tick` ops to
+/// advance the shared clock (lease expiry).
+#[allow(clippy::too_many_arguments)]
+async fn run_role_node(
+    role: NodeRole,
+    cmd_rx: &mut mpsc::Receiver<AppCommand>,
+    evt_tx: &mpsc::Sender<AppEvent>,
+    identity: Identity,
+    listen_addr: Option<String>,
+    bootstrap: Vec<String>,
+    name: String,
+    balance: u64,
+) {
+    let my_key = identity.public_key_bytes();
+    let my_short = identity.public_key_short();
+    let my_addr = node_address(&my_key);
+
+    let listener = match &listen_addr {
+        Some(addr) => match TcpListener::bind(addr).await {
+            Ok(l) => {
+                let _ = evt_tx
+                    .send(AppEvent::Log(format!("Listening on {addr}")))
+                    .await;
+                Some(l)
+            }
+            Err(e) => {
+                let _ = evt_tx
+                    .send(AppEvent::Error(format!("Bind {addr}: {e}")))
+                    .await;
+                return;
+            }
+        },
+        None => None,
+    };
+    let my_listen = listen_addr.unwrap_or_default();
+
+    let _ = evt_tx
+        .send(AppEvent::Log(format!("Identity: {my_short}")))
+        .await;
+
+    let engine = Arc::new(Mutex::new(ConsensusEngine::new(identity, [])));
+    let peers: PeerMap = Arc::new(Mutex::new(HashMap::new()));
+    let seen: SeenSet = Arc::new(Mutex::new(HashSet::new()));
+
+    let _ = evt_tx.send(AppEvent::Connected).await;
+    let _ = evt_tx
+        .send(AppEvent::Registered {
+            participant_id: my_addr,
+        })
+        .await;
+
+    // Register ourselves (and mint our balance) into the shared ledger.
+    submit_and_flood(
+        &engine,
+        &peers,
+        &seen,
+        LedgerOp::RegisterParticipant {
+            id: my_addr,
+            name: name.clone(),
+            public_key: my_key,
+            initial_balance: balance,
+        },
+    )
+    .await;
+
+    for addr in bootstrap {
+        let addr = addr.trim().to_string();
+        if addr.is_empty() {
+            continue;
+        }
+        spawn_dial(
+            addr,
+            my_key,
+            my_listen.clone(),
+            name.clone(),
+            Arc::clone(&engine),
+            Arc::clone(&peers),
+            Arc::clone(&seen),
+            evt_tx.clone(),
+        );
+    }
+
+    let mut executor_handle: Option<tokio::task::JoinHandle<()>> = None;
+    let mut round = tokio::time::interval(Duration::from_millis(500));
+    let mut sync_timer = tokio::time::interval(Duration::from_secs(3));
+    let mut tick_timer = tokio::time::interval(Duration::from_secs(1));
+    let started = std::time::Instant::now();
+    const PROPOSE_GRACE: Duration = Duration::from_millis(2500);
+
+    loop {
+        tokio::select! {
+            _ = round.tick() => {
+                let out = {
+                    let mut e = engine.lock().await;
+                    if started.elapsed() >= PROPOSE_GRACE { e.try_propose() } else { vec![] }
+                };
+                flood_consensus(&peers, &seen, None, out).await;
+                // Push the replicated state to the local UI.
+                let snap = {
+                    let e = engine.lock().await;
+                    build_snapshot(e.state())
+                };
+                let _ = evt_tx.send(AppEvent::StateUpdate(snap)).await;
+            }
+            _ = tick_timer.tick(), if role == NodeRole::Coordinator => {
+                // Coordinator advances the shared clock so leases expire.
+                submit_and_flood(&engine, &peers, &seen, LedgerOp::Tick { n: 1 }).await;
+            }
+            _ = sync_timer.tick() => {
+                let (from, pending) = {
+                    let e = engine.lock().await;
+                    (e.next_index(), e.mempool().to_vec())
+                };
+                let mut msgs = vec![ConsensusMsg::SyncRequest { from_height: from }];
+                msgs.extend(pending.into_iter().map(ConsensusMsg::Op));
+                flood_consensus(&peers, &seen, None, msgs).await;
+            }
+            Some(cmd) = cmd_rx.recv() => {
+                match cmd {
+                    AppCommand::Disconnect => break,
+                    AppCommand::CreateProject { name: pname, owner_encryption_pubkey } => {
+                        submit_and_flood(&engine, &peers, &seen, LedgerOp::CreateProject {
+                            owner_id: my_addr, name: pname, owner_encryption_pubkey,
+                        }).await;
+                    }
+                    AppCommand::FundProject { project_id, amount } => {
+                        submit_and_flood(&engine, &peers, &seen, LedgerOp::FundProject {
+                            owner_id: my_addr, project_id, amount,
+                        }).await;
+                    }
+                    AppCommand::DonateToProject { project_id, amount } => {
+                        submit_and_flood(&engine, &peers, &seen, LedgerOp::DonateToProject {
+                            supporter_id: my_addr, project_id, amount,
+                        }).await;
+                    }
+                    AppCommand::SubmitTask { project_id, reward, payload } => {
+                        submit_and_flood(&engine, &peers, &seen, LedgerOp::SubmitTask {
+                            owner_id: my_addr, project_id, reward, payload,
+                        }).await;
+                    }
+                    AppCommand::SendTokens { to, amount } => {
+                        submit_and_flood(&engine, &peers, &seen, LedgerOp::Transfer {
+                            from: my_addr, to, amount, memo: "transfer".to_string(),
+                        }).await;
+                    }
+                    AppCommand::StartExecutor { reliability, compute_ticks, allowed_packages }
+                        if executor_handle.is_none() =>
+                    {
+                        let h = tokio::spawn(ops_executor_loop(
+                            my_addr, reliability, compute_ticks, allowed_packages,
+                            Arc::clone(&engine), Arc::clone(&peers), Arc::clone(&seen), evt_tx.clone(),
+                        ));
+                        executor_handle = Some(h);
+                        let _ = evt_tx.send(AppEvent::ExecutorStarted).await;
+                        let _ = evt_tx.send(AppEvent::Log("Executor started".to_string())).await;
+                    }
+                    AppCommand::StopExecutor => {
+                        if let Some(h) = executor_handle.take() {
+                            h.abort();
+                            let _ = evt_tx.send(AppEvent::ExecutorStopped).await;
+                            let _ = evt_tx.send(AppEvent::Log("Executor stopped".to_string())).await;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            accept = async {
+                match &listener {
+                    Some(l) => l.accept().await,
+                    None => std::future::pending::<std::io::Result<(TcpStream, std::net::SocketAddr)>>().await,
+                }
+            } => {
+                if let Ok((stream, addr)) = accept {
+                    let _ = evt_tx.send(AppEvent::Log(format!("Peer connected: {addr}"))).await;
+                    tokio::spawn(p2p_connection(
+                        stream, my_key, my_listen.clone(), name.clone(),
+                        Arc::clone(&engine), Arc::clone(&peers), Arc::clone(&seen), evt_tx.clone(),
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Some(h) = executor_handle {
+        h.abort();
+    }
+    let _ = evt_tx
+        .send(AppEvent::Disconnected {
+            reason: "stopped".to_string(),
+        })
+        .await;
+}
+
+/// Worker-side executor driven by the replicated state: claim assigned tasks via
+/// `RequestTask` ops, compute them, and report results via `SubmitResult` ops.
+#[allow(clippy::too_many_arguments)]
+async fn ops_executor_loop(
+    my_addr: ParticipantId,
+    reliability: u8,
+    compute_ticks: u64,
+    allowed_packages: Vec<String>,
+    engine: Arc<Mutex<ConsensusEngine>>,
+    peers: PeerMap,
+    seen: SeenSet,
+    evt_tx: mpsc::Sender<AppEvent>,
+) {
+    ensure_packages(&allowed_packages, &evt_tx).await;
+    let executor = Executor::new(
+        my_addr,
+        "rsm-executor",
+        reliability,
+        compute_ticks.max(1),
+        1,
+        allowed_packages,
+    );
+    let mut processed: HashSet<u64> = HashSet::new();
+    let mut nonce: u64 = 0;
+
+    loop {
+        // A task assigned to me in the replica that I have not yet computed.
+        let job = {
+            let e = engine.lock().await;
+            let st = e.state();
+            st.all_tasks().into_iter().find_map(|t| {
+                let mine = matches!(
+                    &t.status,
+                    crate::model::TaskStatus::Assigned { worker_id, .. } if *worker_id == my_addr
+                );
+                if mine && !processed.contains(&t.id) {
+                    let enc = st.project(t.project_id).and_then(|p| p.owner_encryption_pubkey);
+                    Some((t.id, t.reward, t.payload.clone(), enc))
+                } else {
+                    None
+                }
+            })
+        };
+
+        match job {
+            Some((task_id, reward, payload, owner_enc)) => {
+                processed.insert(task_id);
+                let exec = executor.clone();
+                let computed = tokio::task::spawn_blocking(move || {
+                    exec.execute_task_payload(task_id, &payload, reward)
+                })
+                .await;
+                let Ok((computed, actual_cost)) = computed else {
+                    continue;
+                };
+                let encrypted_result =
+                    owner_enc.map(|pk| Identity::encrypt_for(&pk, computed.stdout.as_bytes()));
+                let _ = evt_tx
+                    .send(AppEvent::Log(format!(
+                        "Computed task #{task_id} → {}",
+                        computed.digest
+                    )))
+                    .await;
+                submit_and_flood(
+                    &engine,
+                    &peers,
+                    &seen,
+                    LedgerOp::SubmitResult {
+                        worker_id: my_addr,
+                        task_id,
+                        result_digest: computed.digest,
+                        actual_cost,
+                        encrypted_result,
+                    },
+                )
+                .await;
+            }
+            None => {
+                let pending = { engine.lock().await.state().pending_count() > 0 };
+                if pending {
+                    nonce += 1;
+                    submit_and_flood(
+                        &engine,
+                        &peers,
+                        &seen,
+                        LedgerOp::RequestTask {
+                            worker_id: my_addr,
+                            nonce,
+                        },
+                    )
+                    .await;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
         }
     }
 }
 
-fn broadcast_snapshot(broadcast_tx: &broadcast::Sender<String>, snap: &NetworkSnapshot) {
-    if let Ok(msg) = serde_json::to_string(&PeerResponse::StateUpdate(snap.clone())) {
-        let _ = broadcast_tx.send(msg);
+#[cfg(test)]
+mod p2p_tests {
+    use super::*;
+
+    /// Spawn a P2P node task with its own generated identity. Returns the
+    /// command sender, event receiver, and the node's ledger address.
+    fn spawn_node(
+        listen: &str,
+        bootstrap: Vec<String>,
+        balance: u64,
+    ) -> (mpsc::Sender<AppCommand>, mpsc::Receiver<AppEvent>, ParticipantId) {
+        let identity = Identity::generate();
+        let addr = node_address(&identity.public_key_bytes());
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<AppCommand>(32);
+        let (evt_tx, evt_rx) = mpsc::channel::<AppEvent>(512);
+        let listen = listen.to_string();
+        tokio::spawn(async move {
+            p2p_node_with_identity(
+                &mut cmd_rx,
+                &evt_tx,
+                identity,
+                listen,
+                bootstrap,
+                "node".to_string(),
+                balance,
+            )
+            .await;
+        });
+        (cmd_tx, evt_rx, addr)
     }
-}
 
-async fn broadcast_and_notify(
-    network: &Arc<Mutex<Network>>,
-    broadcast_tx: &broadcast::Sender<String>,
-    evt_tx: &mpsc::Sender<AppEvent>,
-) {
-    persist_coordinator_state(network, evt_tx).await;
-    let snap = build_snapshot(&*network.lock().await);
-    broadcast_snapshot(broadcast_tx, &snap);
-    let _ = evt_tx.send(AppEvent::StateUpdate(snap)).await;
-}
-
-async fn send_response(writer: &SharedWriter, resp: PeerResponse) {
-    if let Ok(msg) = serde_json::to_string(&resp) {
-        let mut w = writer.lock().await;
-        let _ = w.send(msg).await;
-    }
-}
-
-async fn send_request(writer: &SharedWriter, req: &PeerRequest) -> Result<(), String> {
-    let msg = serde_json::to_string(req).map_err(|e| e.to_string())?;
-    let mut w = writer.lock().await;
-    w.send(msg).await.map_err(|e| e.to_string())
-}
-
-async fn recv_response(reader: &SharedReader) -> Option<PeerResponse> {
-    let timeout = Duration::from_secs(5);
-    let mut r = reader.lock().await;
-    match tokio::time::timeout(timeout, r.next()).await {
-        Ok(Some(Ok(line))) => serde_json::from_str(&line).ok(),
-        _ => None,
-    }
-}
-
-async fn worker_send_recv(
-    writer: &SharedWriter,
-    reader: &SharedReader,
-    evt_tx: &mpsc::Sender<AppEvent>,
-    req: PeerRequest,
-) {
-    if send_request(writer, &req).await.is_err() {
-        return;
-    }
-    match recv_response(reader).await {
-        Some(PeerResponse::Error { msg }) => {
-            let _ = evt_tx.send(AppEvent::Error(msg)).await;
+    /// Drain pending events, returning the most recent P2pUpdate snapshot.
+    fn latest_snapshot(rx: &mut mpsc::Receiver<AppEvent>) -> Option<P2pSnapshot> {
+        let mut last = None;
+        while let Ok(evt) = rx.try_recv() {
+            if let AppEvent::P2pUpdate(snap) = evt {
+                last = Some(snap);
+            }
         }
-        Some(PeerResponse::StateUpdate(snap)) => {
-            let _ = evt_tx.send(AppEvent::StateUpdate(snap)).await;
-        }
-        _ => {}
+        last
     }
-}
 
-async fn request_state_update(
-    writer: &SharedWriter,
-    reader: &SharedReader,
-    evt_tx: &mpsc::Sender<AppEvent>,
-) {
-    let _ = send_request(writer, &PeerRequest::GetState).await;
-    if let Some(PeerResponse::StateUpdate(snap)) = recv_response(reader).await {
-        let _ = evt_tx.send(AppEvent::StateUpdate(snap)).await;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn three_nodes_form_mesh_and_converge_on_a_transfer() {
+        let (_ca, mut ea, _addr_a) = spawn_node("127.0.0.1:17901", vec![], 100);
+        let (_cb, mut eb, addr_b) =
+            spawn_node("127.0.0.1:17902", vec!["127.0.0.1:17901".to_string()], 100);
+        let (_cc, mut ec, _addr_c) =
+            spawn_node("127.0.0.1:17903", vec!["127.0.0.1:17901".to_string()], 100);
+
+        // Let the mesh form and the three initial mints commit.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+        // Node A (first node) transfers 30 to node B.
+        // We don't have A's sender wired for sends here, so use B sending to itself
+        // is meaningless; instead drive the transfer from B to A's address would
+        // need addr_a — use the A command channel.
+        let _ = _ca
+            .send(AppCommand::SendTokens {
+                to: addr_b,
+                amount: 30,
+            })
+            .await;
+
+        // Poll up to ~12s for convergence.
+        let mut converged = false;
+        let mut snap_a = P2pSnapshot::default();
+        let mut snap_b = P2pSnapshot::default();
+        let mut snap_c = P2pSnapshot::default();
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            if let Some(s) = latest_snapshot(&mut ea) {
+                snap_a = s;
+            }
+            if let Some(s) = latest_snapshot(&mut eb) {
+                snap_b = s;
+            }
+            if let Some(s) = latest_snapshot(&mut ec) {
+                snap_c = s;
+            }
+            let equal_height = snap_a.block_count == snap_b.block_count
+                && snap_b.block_count == snap_c.block_count;
+            if equal_height
+                && snap_a.block_count >= 3
+                && snap_a.validators == 3
+                && snap_a.my_balance == 70
+                && snap_b.my_balance == 130
+            {
+                converged = true;
+                break;
+            }
+        }
+
+        assert!(
+            converged,
+            "nodes did not converge: A(h={},val={},bal={}) B(h={},bal={}) C(h={},bal={})",
+            snap_a.block_count,
+            snap_a.validators,
+            snap_a.my_balance,
+            snap_b.block_count,
+            snap_b.my_balance,
+            snap_c.block_count,
+            snap_c.my_balance,
+        );
+        assert!(snap_a.blockchain_valid && snap_b.blockchain_valid && snap_c.blockchain_valid);
+    }
+
+    /// Spawn a coordinator/worker role node with a generated identity.
+    fn spawn_role(
+        role: NodeRole,
+        listen: Option<&str>,
+        bootstrap: Vec<String>,
+        balance: u64,
+    ) -> (mpsc::Sender<AppCommand>, mpsc::Receiver<AppEvent>) {
+        let identity = Identity::generate();
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<AppCommand>(32);
+        let (evt_tx, evt_rx) = mpsc::channel::<AppEvent>(512);
+        let listen = listen.map(|s| s.to_string());
+        tokio::spawn(async move {
+            run_role_node(
+                role,
+                &mut cmd_rx,
+                &evt_tx,
+                identity,
+                listen,
+                bootstrap,
+                "node".to_string(),
+                balance,
+            )
+            .await;
+        });
+        (cmd_tx, evt_rx)
+    }
+
+    fn latest_state(rx: &mut mpsc::Receiver<AppEvent>) -> Option<NetworkSnapshot> {
+        let mut last = None;
+        while let Ok(evt) = rx.try_recv() {
+            if let AppEvent::StateUpdate(snap) = evt {
+                last = Some(snap);
+            }
+        }
+        last
+    }
+
+    /// A coordinator and two workers, all consensus validators over one shared
+    /// ledger: the coordinator creates/funds a project and submits a task; every
+    /// node must converge on the identical project + task state.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn coordinator_and_workers_converge_on_project_and_task() {
+        let (cc, mut ec) = spawn_role(NodeRole::Coordinator, Some("127.0.0.1:17911"), vec![], 100);
+        let (_w1, mut e1) = spawn_role(
+            NodeRole::Worker,
+            None,
+            vec!["127.0.0.1:17911".to_string()],
+            0,
+        );
+        let (_w2, mut e2) = spawn_role(
+            NodeRole::Worker,
+            None,
+            vec!["127.0.0.1:17911".to_string()],
+            0,
+        );
+
+        // Let the mesh form, validators propagate, and registrations commit.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+        let _ = cc
+            .send(AppCommand::CreateProject {
+                name: "P".to_string(),
+                owner_encryption_pubkey: None,
+            })
+            .await;
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        let _ = cc
+            .send(AppCommand::FundProject {
+                project_id: 1,
+                amount: 50,
+            })
+            .await;
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        let _ = cc
+            .send(AppCommand::SubmitTask {
+                project_id: 1,
+                reward: 10,
+                payload: "x".to_string(),
+            })
+            .await;
+
+        let mut sc = NetworkSnapshot::default();
+        let mut s1 = NetworkSnapshot::default();
+        let mut s2 = NetworkSnapshot::default();
+        let mut converged = false;
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            if let Some(s) = latest_state(&mut ec) {
+                sc = s;
+            }
+            if let Some(s) = latest_state(&mut e1) {
+                s1 = s;
+            }
+            if let Some(s) = latest_state(&mut e2) {
+                s2 = s;
+            }
+            let ok = |s: &NetworkSnapshot| {
+                s.projects.len() == 1
+                    && s.tasks.len() == 1
+                    && s.projects[0].quota_available == 40
+                    && s.projects[0].quota_locked == 10
+            };
+            if ok(&sc) && ok(&s1) && ok(&s2) {
+                converged = true;
+                break;
+            }
+        }
+
+        assert!(
+            converged,
+            "did not converge: coord(p={},t={}) w1(p={},t={}) w2(p={},t={})",
+            sc.projects.len(),
+            sc.tasks.len(),
+            s1.projects.len(),
+            s1.tasks.len(),
+            s2.projects.len(),
+            s2.tasks.len(),
+        );
+        // All three replicas agree on the funded project's quota split.
+        assert_eq!(s1.projects[0].quota_locked, 10);
+        assert_eq!(s2.projects[0].quota_available, 40);
     }
 }

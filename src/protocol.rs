@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::consensus::ConsensusMsg;
 use crate::identity::EncryptedBlob;
 use crate::model::{ParticipantId, ProjectId, TaskId};
 
@@ -71,6 +72,39 @@ pub enum NodeMode {
     #[default]
     Coordinator,
     Worker,
+    /// Peer in the BFT-consensus P2P ledger mesh.
+    Peer,
+}
+
+/// Snapshot of a P2P consensus node's view, pushed to the UI.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct P2pSnapshot {
+    pub node_key_short: String,
+    pub peers: usize,
+    pub validators: usize,
+    pub mempool: usize,
+    pub block_count: usize,
+    pub blockchain_valid: bool,
+    pub my_balance: u64,
+    pub blocks: Vec<BlockView>,
+}
+
+/// Wire envelope for the P2P mesh (line-delimited JSON over TCP).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum P2pMessage {
+    /// First message on a fresh connection: identify self + advertise listener.
+    Hello {
+        node_key: [u8; 32],
+        listen_addr: String,
+        name: String,
+    },
+    /// Gossip of known peer listen addresses for mesh discovery.
+    Peers(Vec<String>),
+    /// Membership announcement: a validator's public key. Flooded so every node
+    /// learns the full validator set even in a hub (relay) topology.
+    Validator([u8; 32]),
+    /// A consensus-engine message to be flooded across the mesh.
+    Consensus(ConsensusMsg),
 }
 
 // App UI → NetworkActor (local channel)
@@ -81,6 +115,9 @@ pub enum AppCommand {
         name: String,
         balance: u64,
         quorum: u64,
+        /// Other coordinators to peer with for consensus gossip (mesh of hubs).
+        #[allow(dead_code)]
+        peer_coordinators: Vec<String>,
     },
     ConnectWorker {
         coord_addr: String,
@@ -110,6 +147,18 @@ pub enum AppCommand {
         allowed_packages: Vec<String>,
     },
     StopExecutor,
+    /// Join the BFT-consensus P2P ledger mesh.
+    JoinP2P {
+        listen_addr: String,
+        bootstrap_peers: Vec<String>,
+        name: String,
+        balance: u64,
+    },
+    /// Submit a token transfer into the consensus mempool (Peer mode).
+    SendTokens {
+        to: ParticipantId,
+        amount: u64,
+    },
     Disconnect,
 }
 
@@ -120,6 +169,7 @@ pub enum AppEvent {
     Disconnected { reason: String },
     Registered { participant_id: ParticipantId },
     StateUpdate(NetworkSnapshot),
+    P2pUpdate(P2pSnapshot),
     ExecutorStarted,
     ExecutorStopped,
     Log(String),
