@@ -40,6 +40,13 @@ pub struct OpBlock {
     pub prev_hash: [u8; 32],
     pub proposer: NodeKey,
     pub ops: Vec<LedgerOp>,
+    /// Number of validator signatures required to seal this block, fixed by the
+    /// proposer at propose time. Stored so a node that later learns of more
+    /// validators (larger quorum) still accepts blocks sealed earlier under a
+    /// smaller validator set — otherwise late joiners reject early blocks and
+    /// never converge.
+    #[serde(default)]
+    pub quorum: usize,
     pub hash: [u8; 32],
     #[serde(default)]
     pub votes: Vec<BlockVote>,
@@ -51,6 +58,7 @@ impl OpBlock {
         prev_hash: &[u8; 32],
         proposer: &NodeKey,
         ops: &[LedgerOp],
+        quorum: usize,
     ) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(index.to_le_bytes());
@@ -58,30 +66,39 @@ impl OpBlock {
         hasher.update(proposer);
         // Stable serialization: serde_json field order is fixed by the structs.
         hasher.update(serde_json::to_vec(ops).unwrap_or_default());
+        hasher.update((quorum as u64).to_le_bytes());
         hasher.finalize().into()
     }
 
     fn genesis() -> Self {
         let proposer = [0u8; 32];
         let ops = Vec::new();
-        let hash = Self::compute_hash(0, &[0u8; 32], &proposer, &ops);
+        let hash = Self::compute_hash(0, &[0u8; 32], &proposer, &ops, 0);
         Self {
             index: 0,
             prev_hash: [0u8; 32],
             proposer,
             ops,
+            quorum: 0,
             hash,
             votes: Vec::new(),
         }
     }
 
-    pub fn proposed(index: u64, prev_hash: [u8; 32], proposer: NodeKey, ops: Vec<LedgerOp>) -> Self {
-        let hash = Self::compute_hash(index, &prev_hash, &proposer, &ops);
+    pub fn proposed(
+        index: u64,
+        prev_hash: [u8; 32],
+        proposer: NodeKey,
+        ops: Vec<LedgerOp>,
+        quorum: usize,
+    ) -> Self {
+        let hash = Self::compute_hash(index, &prev_hash, &proposer, &ops, quorum);
         Self {
             index,
             prev_hash,
             proposer,
             ops,
+            quorum,
             hash,
             votes: Vec::new(),
         }
@@ -239,7 +256,7 @@ impl ConsensusEngine {
         }
 
         let ops = self.mempool.clone();
-        let block = OpBlock::proposed(height, self.head_hash(), self.me, ops);
+        let block = OpBlock::proposed(height, self.head_hash(), self.me, ops, self.quorum());
 
         self.store_proposal(block.clone());
         let mut out = vec![ConsensusMsg::Propose(block.clone())];
@@ -304,7 +321,13 @@ impl ConsensusEngine {
         if self.proposer_for(height) != Some(block.proposer) {
             return vec![];
         }
-        let expected = OpBlock::compute_hash(block.index, &block.prev_hash, &block.proposer, &block.ops);
+        let expected = OpBlock::compute_hash(
+            block.index,
+            &block.prev_hash,
+            &block.proposer,
+            &block.ops,
+            block.quorum,
+        );
         if block.hash != expected {
             return vec![];
         }
@@ -394,24 +417,25 @@ impl ConsensusEngine {
         if height != self.next_index() {
             return vec![];
         }
-        let quorum = self.quorum();
-        let tally = self
-            .votes
-            .get(&height)
-            .and_then(|m| m.get(&block_hash))
-            .map(|v| v.len())
-            .unwrap_or(0);
-        if tally < quorum {
-            return vec![];
-        }
+        // Seal against the quorum the proposer fixed in the block, not the
+        // current validator count (which may have grown since).
         let Some(mut block) = self
             .proposals
             .get(&height)
             .and_then(|m| m.get(&block_hash))
             .cloned()
         else {
-            return vec![];
+            return vec![]; // have votes but not the block yet
         };
+        let tally = self
+            .votes
+            .get(&height)
+            .and_then(|m| m.get(&block_hash))
+            .map(|v| v.len())
+            .unwrap_or(0);
+        if tally < block.quorum.max(1) {
+            return vec![];
+        }
 
         block.votes = self
             .votes
@@ -472,7 +496,9 @@ impl ConsensusEngine {
         if block.index == 0 {
             return true;
         }
-        let quorum = self.quorum();
+        // Validate against the quorum the block was sealed under (stored in the
+        // block), not our current validator count.
+        let quorum = block.quorum.max(1);
         let valid = block
             .votes
             .iter()
@@ -597,7 +623,7 @@ mod tests {
     #[test]
     fn forged_vote_is_rejected_by_certificate_check() {
         let engines = make_network(4);
-        let mut block = OpBlock::proposed(1, engines[0].head_hash(), engines[0].me(), vec![]);
+        let mut block = OpBlock::proposed(1, engines[0].head_hash(), engines[0].me(), vec![], 3);
         block.votes = engines
             .iter()
             .map(|e| BlockVote {
